@@ -697,6 +697,64 @@ func parseStructureDefinition(inner *XNode, spec *ChartSpec, datasets map[string
 	return true
 }
 
+// parseWordCloudDefinition handles WordCloudTableDefinition, which names a
+// word column and a weight column:
+//
+//	<WordCloudTableDefinition name="" wordname="搜索词" wordvalue="浏览量(PV)">
+func parseWordCloudDefinition(inner *XNode, spec *ChartSpec, datasets map[string]*Dataset, warn func(string)) bool {
+	wc := inner.Child("WordCloudTableDefinition")
+	if wc == nil {
+		wc = inner.Find("WordCloudTableDefinition")
+	}
+	if wc == nil {
+		return false
+	}
+	ds := datasetOf(inner, datasets)
+	if ds == nil {
+		warn("词云引用的数据集不存在")
+		return false
+	}
+	if !ds.Loaded || len(ds.Rows) == 0 {
+		warn("词云数据集没有数据")
+		return false
+	}
+	wordCol := wc.Attr("wordname")
+	valueCol := wc.Attr("wordvalue")
+	wIdx := ds.ColumnIndex(wordCol)
+	vIdx := ds.ColumnIndex(valueCol)
+	if wIdx < 0 || vIdx < 0 {
+		warn(fmt.Sprintf("词云数据集 %s 缺少词/权重列（%s / %s）", ds.Name, wordCol, valueCol))
+		return false
+	}
+	var words []string
+	var weights []float64
+	for _, row := range ds.Rows {
+		w := strings.TrimSpace(stringOf(cellValue(row, wIdx)))
+		if w == "" {
+			continue
+		}
+		v, ok := toFloat(cellValue(row, vIdx))
+		if !ok {
+			continue
+		}
+		words = append(words, w)
+		weights = append(weights, v)
+	}
+	if len(words) == 0 {
+		warn("词云没有有效的词频数据")
+		return false
+	}
+	// The word cloud draws one point per word, so the categories carry the
+	// words and the single series carries the weights.
+	spec.Categories = words
+	spec.Series = append(spec.Series, ChartSeries{
+		Name: firstNonEmpty(valueCol, "权重"),
+		Data: weights,
+		Type: "wordcloud",
+	})
+	return true
+}
+
 // parseMeterDefinition handles MeterTableDefinition, the data source of a
 // gauge chart. It names a category column and a value column directly, and
 // optionally carries a custom target value.
@@ -906,6 +964,11 @@ func parseChartData(chart *XNode, spec *ChartSpec, datasets map[string]*Dataset,
 		}
 		if n := unwrapFirst(inner, "MoreNameCDDefinition"); n != nil {
 			inner = n
+		}
+	case strings.Contains(name, "WordCloud"):
+		// WordCloudTableDefinition names the word column and the weight column.
+		if parseWordCloudDefinition(inner, spec, datasets, warn) {
+			return
 		}
 	case strings.Contains(name, "Meter"):
 		// MeterTableDefinition names a category column and a value column

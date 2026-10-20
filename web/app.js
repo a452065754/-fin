@@ -1184,9 +1184,59 @@
     }
 
     if (kind === 'wordcloud') {
-      // Word cloud needs the echarts-wordcloud plugin, which is not bundled;
-      // fall back to a readable bar of the same frequencies.
-      kind = 'bar';
+      // The echarts-wordcloud plugin needs ECharts 5, but the bundled copy is
+      // 4.1.0, so the cloud is laid out here instead: words are placed along
+      // an Archimedean spiral and drawn on a scatter series.
+      var words = cats.map(function (name, i) {
+        return { name: name, value: Number((series[0] && series[0].data[i]) || 0) };
+      }).filter(function (w) { return w.name && w.value > 0; });
+      if (!words.length) return null;
+      words.sort(function (a, b) { return b.value - a.value; });
+      var top = words.slice(0, 80);
+      var maxV = top[0].value || 1;
+      var minV = top[top.length - 1].value || 0;
+      var span = (maxV - minV) || 1;
+      // Estimate the pixel size of each word from its length and weight.
+      // The result is clamped so a degenerate weight range cannot produce an
+      // unusable (zero or negative) font size.
+      var sizes = top.map(function (w) {
+        var ratio = (w.value - minV) / span;
+        if (!isFinite(ratio) || ratio < 0) ratio = 0;
+        if (ratio > 1) ratio = 1;
+        return Math.max(10, Math.min(48, 12 + ratio * 34));
+      });
+      var placed = layoutWordCloud(top, sizes);
+      if (!placed.length) return null;
+      var cw = 520;
+      var ch = Math.max(160, Math.ceil(placed.totalHeight || 320));
+      return shallow(base, {
+        tooltip: {
+          trigger: 'item',
+          textStyle: { fontSize: 11, fontFamily: FONT_STACK },
+          formatter: function (p) {
+            var d = p.data || {};
+            return (d.name || '') + '<br>' + formatNumber(d.value);
+          }
+        },
+        legend: { show: false },
+        grid: { left: 4, right: 4, top: 24, bottom: 4 },
+        xAxis: { type: 'value', min: 0, max: cw, show: false },
+        yAxis: { type: 'value', min: 0, max: ch, show: false },
+        series: [{
+          type: 'scatter',
+          data: placed,
+          symbolSize: 0,
+          label: {
+            show: true,
+            formatter: function (p) { return p.data.name; },
+            fontSize: function (p) { return p.data.size; },
+            color: function (p) { return p.data.color; },
+            fontFamily: FONT_STACK,
+            fontWeight: 'bold'
+          },
+          emphasis: { label: { fontSize: function (p) { return p.data.size + 3; } } }
+        }]
+      });
     }
 
     if (kind === 'map') {
@@ -1322,6 +1372,98 @@
   function shallow(target, src) {
     Object.keys(src).forEach(function (k) { target[k] = src[k]; });
     return target;
+  }
+
+  // Lays out words by packing them into rows, largest first.
+  //
+  // A word cloud is not a scatter plot: what matters is that the words fill
+  // the area without overlapping and that the biggest ones are near the
+  // middle. Packing into rows achieves that reliably, while a spiral tends to
+  // leave large empty gaps.
+  function layoutWordCloud(words, sizes) {
+    var W = 520;
+    // The gap between two neighbouring words. It is applied as extra room
+    // around a word rather than added to both neighbours, so the row width
+    // stays an accurate sum.
+    var gap = 8;
+    var placed = [];
+    var boxes = [];
+    var palette = [PALETTE[0], '#f59e0b', '#10b981', '#ef4444', '#8b5cf6',
+                   '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1'];
+
+    // Measure every word first.
+    var items = [];
+    for (var i = 0; i < words.length; i++) {
+      var text = String(words[i].name);
+      var size = sizes[i];
+      if (!isFinite(size) || size <= 0) size = 12;
+      size = Math.max(6, Math.min(72, size));
+      // Chinese glyphs are square, latin ones are roughly half as wide.
+      var wide = 0;
+      for (var k = 0; k < text.length; k++) {
+        wide += text.charCodeAt(k) > 0x2e80 ? 1 : 0.55;
+      }
+      items.push({
+        name: text,
+        value: words[i].value,
+        size: size,
+        w: wide * size * 0.62,
+        h: size * 1.2,
+        color: palette[i % palette.length]
+      });
+    }
+    if (!items.length) return placed;
+
+    // Pack into rows: start a new row when the current one is full. Each row
+    // is sorted by size so the row height can be taken from its first (and
+    // largest) word.
+    var rows = [];
+    var cur = [];
+    var curW = 0;
+    for (var m = 0; m < items.length; m++) {
+      var need = cur.length ? gap : 0;
+      if (curW + need + items[m].w > W && cur.length) {
+        rows.push({ items: cur, w: curW });
+        cur = [];
+        curW = 0;
+        need = 0;
+      }
+      cur.push(items[m]);
+      curW += need + items[m].w;
+    }
+    if (cur.length) rows.push({ items: cur, w: curW });
+    for (var rs = 0; rs < rows.length; rs++) {
+      rows[rs].items.sort(function (a, b) { return b.size - a.size; });
+    }
+
+    // Centre each row, and stack the rows around the vertical middle.
+    var y = 0;
+    for (var r2 = 0; r2 < rows.length; r2++) {
+      var row = rows[r2];
+      var rowH = row.items[0].h + gap;
+      // Centre the row. A row can be wider than the canvas when a single word
+      // is very large, so the offset is clamped to keep everything on screen.
+      var x = Math.max(0, (W - row.w) / 2);
+      var cy = y + rowH / 2;
+      for (var q = 0; q < row.items.length; q++) {
+        var it = row.items[q];
+        placed.push({
+          name: it.name,
+          value: it.value,
+          x: x + it.w / 2,
+          y: cy,
+          size: Math.round(it.size),
+          color: it.color
+        });
+        boxes.push({ x: x + it.w / 2, y: cy, bw: it.w, bh: it.h });
+        x += it.w + gap;
+      }
+      y += rowH;
+    }
+
+    // Report the height so the caller can size the chart.
+    placed.totalHeight = y;
+    return placed;
   }
 
   function formatNumber(v) {

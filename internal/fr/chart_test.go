@@ -290,6 +290,115 @@ func TestParseMeterTarget(t *testing.T) {
 	}
 }
 
+// A word cloud must read its words and weights from the WordCloud data
+// definition rather than falling back to a bar chart.
+// A word cloud must be recognised as such and read its word/weight columns
+// from the WordCloud data definition.
+//
+// The bundled demo template's embedded data does not survive decoding (the
+// deflate stream is incomplete — FineReport's own Inflater reports
+// "not-finished" on it too, see tools/oracle/Ascii85Oracle.java), so this
+// asserts the parsing behaviour rather than the data. The data path is
+// covered by TestWordCloudWithData below.
+func TestChartWordCloud(t *testing.T) {
+	tpl, err := ParseCPTFile(webroot + `/WEB-INF/reportlets/doc/Chart/WorldCloud/词云图.cpt`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// The definition must name a word column and a weight column.
+	var found bool
+	for _, sh := range tpl.Sheets {
+		for _, ct := range sh.CellList {
+			if ct.ChartXML == nil {
+				continue
+			}
+			def := ct.ChartXML.Find("ChartDefinition")
+			if def == nil {
+				continue
+			}
+			for _, n := range def.Children {
+				wc := n.Find("WordCloudTableDefinition")
+				if wc == nil {
+					continue
+				}
+				found = true
+				if wc.Attr("wordname") == "" {
+					t.Error("词云定义缺少词列(wordname)")
+				}
+				if wc.Attr("wordvalue") == "" {
+					t.Error("词云定义缺少权重列(wordvalue)")
+				}
+				t.Logf("词云定义: 词列=%q 权重列=%q", wc.Attr("wordname"), wc.Attr("wordvalue"))
+			}
+		}
+	}
+	if !found {
+		t.Fatal("未找到 WordCloudTableDefinition")
+	}
+}
+
+// The word cloud data path must work when the dataset does decode.
+func TestWordCloudWithData(t *testing.T) {
+	ds := &Dataset{
+		Name:        "wc",
+		ClassName:   "com.fr.data.impl.EmbeddedTableData",
+		Columns:     []string{"搜索词", "浏览量(PV)"},
+		ColumnTypes: []string{"java.lang.String", "java.lang.Integer"},
+		Rows: [][]any{
+			{"报表", 120}, {"数据", 90}, {"分析", 75}, {"可视化", 60}, {"大屏", 45},
+		},
+		Loaded: true,
+	}
+	// Build a definition node the way FineReport writes it.
+	xml := `<ChartDefinition><WordCloudTableDefinition name="" wordname="搜索词" wordvalue="浏览量(PV)">` +
+		`<TableData class="com.fr.data.impl.NameTableData"><Name><![CDATA[wc]]></Name></TableData>` +
+		`</WordCloudTableDefinition></ChartDefinition>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("xml: %v", err)
+	}
+	def := root.Find("ChartDefinition")
+	if def == nil {
+		t.Fatal("未解析到 ChartDefinition")
+	}
+	inner := def.Children[0]
+	spec := &ChartSpec{Kind: "wordcloud", Legend: false}
+	var warns []string
+	parseWordCloudDefinition(inner, spec, map[string]*Dataset{"wc": ds}, func(s string) {
+		warns = append(warns, s)
+	})
+	if len(warns) > 0 {
+		t.Fatalf("解析告警: %v", warns)
+	}
+	if len(spec.Categories) != 5 {
+		t.Errorf("词数应为 5，实际 %d", len(spec.Categories))
+	}
+	if len(spec.Series) != 1 || len(spec.Series[0].Data) != 5 {
+		t.Fatalf("权重数据异常: %+v", spec.Series)
+	}
+	if spec.Categories[0] != "报表" || spec.Series[0].Data[0] != 120 {
+		t.Errorf("首个词异常: %q = %v", spec.Categories[0], spec.Series[0].Data[0])
+	}
+	t.Logf("词云解析成功: %v = %v", spec.Categories, spec.Series[0].Data)
+}
+
+// A word cloud must not be downgraded to a bar chart.
+func TestChartWordCloudNotDowngraded(t *testing.T) {
+	p := renderDemo(t, webroot+`/WEB-INF/reportlets/doc/Chart/WorldCloud/词云图.cpt`)
+	for _, w := range p.Warnings {
+		if strings.Contains(w, "降级") {
+			t.Errorf("词云仍被降级: %s", w)
+		}
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // No chart anywhere in the sample set may still be downgraded to a bar.
 func TestNoDowngradeWarnings(t *testing.T) {
 	samples := []string{

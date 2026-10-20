@@ -19,17 +19,17 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 | 看组合图/气泡图/甘特图/层级图/热力图/多层饼 | ✅ | |
 | **看仪表盘** | ✅ | 数值、量程、阈值分段色带都对 |
 | **看引用报表单元格的图表** | ✅ | `=C3` 这类公式引用的图表能取到值 |
+| **看词云** | ✅ | 自研行填充布局，无需 ECharts 5 插件 |
 | 查 FRDemo 演示库 | ✅ | 免密 |
 | 查 MySQL / Oracle / SQL Server | ⚠️ | 代码就绪，**未连真库验证** |
 | 看地图 | ⚠️ | 降级为排名条形（无 GeoJSON） |
-| 看词云 | ⚠️ | 降级为词频条形（无插件） |
 | 看箱型图 | ⚠️ | 降级为条形（模板不落五数概括） |
 
 ## 硬指标
 
 | 指标 | 值 | 怎么测的 |
 |---|---|---|
-| 测试用例 | 33 例全绿 | `go test ./...` |
+| 测试用例 | 36 例全绿 | `go test ./...` |
 | 模板扫描 | 1770 个 CPT+FVS | `GET /api/templates` |
 | 数据连接发现 | 14 个（sqlite/mysql/oracle/sqlserver） | `GET /api/connections` |
 | 图表类型识别 | 18 种 `spec.Kind` | `chart.go` 枚举比对 |
@@ -63,8 +63,8 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 
 ## 下一步
 
-**P1-2：词云**。引入 `echarts-wordcloud` 插件（需打进 vendor 目录）。
-之后是 P1-3 箱型图、P1-1 地图 GeoJSON。详见 [ROADMAP.md](ROADMAP.md)。
+**P1-3：箱型图**。之后是 P1-1 地图 GeoJSON、P2-x 增强项。
+详见 [ROADMAP.md](ROADMAP.md)。
 
 ## 风险提示
 
