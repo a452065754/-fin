@@ -2,6 +2,8 @@ package fr
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,9 @@ type renderState struct {
 	// sheet index then cell coordinates. Charts whose data definition points
 	// at report cells (rather than a dataset) read from here.
 	cellValues map[int]map[[2]int]any
+	// renderedSheets keeps the sheets rendered so far so that a formula can
+	// reference another sheet of the same report.
+	renderedSheets []Sheet
 	// sheetIndex is the index of the sheet currently being rendered.
 	sheetIndex int
 }
@@ -28,10 +33,16 @@ func (t *CPTTemplate) Render(dr *DataResolver, params map[string]string) *Previe
 	p := &Preview{Path: t.Path, Name: t.Name, Kind: "cpt", Title: t.Name, Params: t.Params}
 	st := newRenderState(t, dr, params)
 	st.loadDatasets()
+	// Sheets are rendered up front so that cross-sheet references such as
+	// '2010-实际'!N5 can read the referenced sheet's cells.
+	sheets := make([]Sheet, len(t.Sheets))
 	for i, sh := range t.Sheets {
 		st.sheetIndex = i
-		p.Sheets = append(p.Sheets, *st.renderSheet(sh))
+		sheets[i] = *st.renderSheet(sh)
+		// Keep the finished sheet so a later sheet can reference it.
+		st.renderedSheets = append(st.renderedSheets, sheets[i])
 	}
+	p.Sheets = sheets
 	p.Warnings = append(p.Warnings, st.warnings...)
 	return p
 }
@@ -270,12 +281,136 @@ func (r *renderState) evalFormula(ct *CellTemplate, ref func(string) (any, bool)
 	ctx.Ref = ref
 	ctx.Range = rng
 	ctx.Seq = seq
+	ctx.ReportCell = r.reportCell
+	ctx.SheetCell = r.sheetCell
+	ctx.DatasetFields = r.datasetFields
 	v, err := EvalFormula(ct.Formula, ctx)
 	if err != nil {
 		r.warn(fmt.Sprintf("公式 %s 计算失败: %v", strings.TrimSpace(ct.Formula), err))
 		return "#ERROR"
 	}
 	return v
+}
+
+// reportCell resolves FineReport's cross-report reference
+// VALUE("report name", row, column). The referenced report is looked up by
+// its file name under the reportlets tree and rendered on demand.
+func (r *renderState) reportCell(name string, row, col int) (any, bool) {
+	if r.dr == nil || r.dr.Webroot == "" {
+		return nil, false
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, false
+	}
+	path, ok := r.findReportByName(name)
+	if !ok {
+		return nil, false
+	}
+	preview, err := r.renderOtherReport(path)
+	if err != nil {
+		r.warn(fmt.Sprintf("公式引用报表 %s 失败: %v", name, err))
+		return nil, false
+	}
+	if len(preview.Sheets) == 0 {
+		return nil, false
+	}
+	sh := preview.Sheets[0]
+	for _, c := range sh.Cells {
+		if c.R == row-1 && c.C == col-1 {
+			return c.Text, true
+		}
+	}
+	return nil, false
+}
+
+// findReportByName searches the reportlets tree for a report whose file name
+// matches the given name (without the .cpt extension).
+func (r *renderState) findReportByName(name string) (string, bool) {
+	root := filepath.Join(r.dr.Webroot, "WEB-INF", "reportlets")
+	// Direct hit first: the report may live next to the current template.
+	if p, ok := r.findInDir(root, name); ok {
+		return p, true
+	}
+	return "", false
+}
+
+// findInDir walks one directory level looking for name.cpt / name.fvs.
+func (r *renderState) findInDir(dir, name string) (string, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		base := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		if base == name {
+			return filepath.Join(dir, e.Name()), true
+		}
+	}
+	return "", false
+}
+
+// renderOtherReport parses and renders a report that a formula referenced.
+func (r *renderState) renderOtherReport(path string) (*Preview, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".cpt":
+		tpl, err := ParseCPTFile(path)
+		if err != nil {
+			return nil, err
+		}
+		return tpl.Render(r.dr, r.params), nil
+	case ".fvs":
+		tpl, err := ParseFVSFile(path)
+		if err != nil {
+			return nil, err
+		}
+		return tpl.Render(r.dr, r.params), nil
+	}
+	return nil, fmt.Errorf("不支持的报表类型 %s", ext)
+}
+
+// datasetFields lists the column names of a dataset declared in the template.
+func (r *renderState) datasetFields(name string) ([]string, bool) {
+	ds, ok := r.tpl.Datasets[name]
+	if !ok {
+		return nil, false
+	}
+	if len(ds.Columns) > 0 {
+		return ds.Columns, true
+	}
+	return nil, false
+}
+
+// sheetCell resolves a cross-sheet reference such as '2010-实际'!N5 by
+// looking the cell up in the already rendered sheets.
+func (r *renderState) sheetCell(sheet, ref string) (any, bool) {
+	col, row, ok := CellRefParts(ref)
+	if !ok {
+		return nil, false
+	}
+	// The rendered grid of the current sheet is the one being built, so a
+	// reference into another sheet is resolved from the stored results.
+	if vals, ok := r.cellValues[r.sheetIndex]; ok {
+		if v, ok := vals[[2]int{row, col}]; ok {
+			return v, true
+		}
+	}
+	for i, sh := range r.renderedSheets {
+		if !strings.EqualFold(sh.Name, sheet) {
+			continue
+		}
+		for _, c := range sh.Cells {
+			if c.R == row && c.C == col {
+				return c.Text, true
+			}
+		}
+		_ = i
+	}
+	return nil, false
 }
 
 func compareRaw(a, b any) int {
