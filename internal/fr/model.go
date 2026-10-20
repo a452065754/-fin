@@ -27,6 +27,11 @@ type Preview struct {
 	Height   float64    `json:"height,omitempty"`
 	Warnings []string   `json:"warnings,omitempty"`
 	Error    string     `json:"error,omitempty"`
+	// H5 holds the mobile layout parameters of an H5 template. It is nil
+	// for ordinary desktop templates.
+	H5 *H5Spec `json:"h5,omitempty"`
+	// HasForm reports whether the template carries fill-in controls.
+	HasForm bool `json:"hasForm,omitempty"`
 }
 
 type Sheet struct {
@@ -46,6 +51,8 @@ type OutCell struct {
 	Text  string     `json:"text,omitempty"`
 	Style Style      `json:"style,omitempty"`
 	Chart *ChartSpec `json:"chart,omitempty"`
+	// Widget is set when the cell carries a fill-in control.
+	Widget *WidgetSpec `json:"widget,omitempty"`
 }
 
 type Style struct {

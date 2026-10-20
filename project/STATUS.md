@@ -24,23 +24,25 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 | 查 FRDemo 演示库 | ✅ | 免密 |
 | 查 MySQL / Oracle / SQL Server | ⚠️ | 代码就绪，**未连真库验证** |
 | 看地图 | ⚠️ | 降级为排名条形（无 GeoJSON） |
+| 看填报报表（表单） | ✅ | 16 万控件单元格渲染为可交互控件 |
+| 看 H5 手机端模板 | ✅ | 自动切手机布局 |
 
 ## 硬指标
 
-<!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- AUTO:STATUS:BEGIN -->
+<!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- AUTO:STATUS:BEGIN -->
 
 <!-- 本区块由 tools/gen_status.py 生成，请勿手改。改完跑一次即可。 -->
 
 | 指标 | 值 | 怎么测的 |
 |---|---|---|
-| 测试用例 | 91 例 | `go test ./...` |
+| 测试用例 | 102 例 | `go test ./...` |
 | 图表类型 | 18 种 | `internal/fr/chart.go` 的 `spec.Kind` 枚举 |
 | HTTP 接口 | 7 个 | `internal/server/server.go` 的路由表 |
-| Go 代码 | 11746 行 | `wc -l` |
-| 前端代码 | 3301 行 | `wc -l` |
+| Go 代码 | 12511 行 | `wc -l` |
+| 前端代码 | 3611 行 | `wc -l` |
 | 可配置环境变量 | 5 个 | `FR_TEST_WEBROOT`、`FR_WEBROOT`、`RV_AUDIT_LOG`、`RV_PASSWORD`、`RV_USER` |
 
-<!-- AUTO:STATUS:END --> --> --> --> --> --> --> --> -->
+<!-- AUTO:STATUS:END --> --> --> --> --> --> --> --> --> -->
 
 以下几项依赖运行环境，手工维护：
 

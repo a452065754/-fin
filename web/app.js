@@ -36,6 +36,11 @@
     if (localStorage.getItem('rv.sidebar') === '1') {
       document.getElementById('app').classList.add('sidebar-collapsed');
     }
+    // On a phone the template tree would cover the report, so it starts
+    // collapsed; the toolbar button brings it back.
+    if (window.innerWidth <= 900) {
+      els.app.classList.add('sidebar-collapsed');
+    }
     var initial = readHash();
     if (initial) {
       // The hash carries the template path and its parameters, so a preview
@@ -766,6 +771,37 @@
     box.appendChild(scaleEl);
     wrap.appendChild(box);
     els.previewRoot.appendChild(wrap);
+    // An H5 template was authored for the phone client, so the preview
+    // switches to the mobile layout.
+    if (data.h5) {
+      applyH5Mode(data.h5, width);
+    }
+  }
+
+  // applyH5Mode switches the preview into the phone layout. The H5 marker
+  // tells the viewer which pans the mobile canvas allows and whether
+  // pinch-zoom is permitted.
+  function applyH5Mode(h5, width) {
+    var root = els.previewRoot;
+    root.classList.add('h5-mode');
+    if (h5.horizontal === false) root.classList.add('h5-noscroll-x');
+    if (h5.vertical === false) root.classList.add('h5-noscroll-y');
+    if (!h5.zoom) root.classList.add('h5-nozoom');
+    if (h5.canvasSize) root.classList.add('h5-canvassize');
+    // The phone canvas is as wide as the screen, so the sheet is scaled
+    // down to fit instead of scrolling sideways.
+    var avail = Math.max(240, els.stage.clientWidth - 24);
+    var scale = Math.min(1, avail / Math.max(1, width));
+    if (scale < 0.35) scale = 0.35;
+    state.fit = false;
+    state.zoom = scale;
+    applyZoom();
+    // The template tree would cover the phone-sized report.
+    if (els.app) els.app.classList.add('sidebar-collapsed');
+    var badge = els.kindBadge;
+    if (badge && badge.textContent.indexOf('H5') < 0) {
+      badge.textContent = badge.textContent + ' · H5';
+    }
   }
 
   function renderFVS(data) {
@@ -844,6 +880,9 @@
       if (cell.chart) {
         el.classList.add('cell-chart');
         el.appendChild(chartBox(cell.chart));
+      } else if (cell.widget) {
+        el.classList.add('cell-widget');
+        el.appendChild(buildFormControl(cell));
       } else if (cell.text !== undefined && cell.text !== null && cell.text !== '') {
         var inner = document.createElement('div');
         inner.className = 'cell-inner';
@@ -853,6 +892,111 @@
       frag.appendChild(el);
     });
     return frag;
+  }
+
+  // buildFormControl renders a fill-in control (填报控件). The value comes
+  // from the cell itself; the widget only decides how it is presented.
+  // The name differs from buildWidget, which builds FVS dashboard widgets.
+  function buildFormControl(cell) {
+    var w = cell.widget || {};
+    var kind = String(w.kind || 'text').toLowerCase();
+    var value = cell.text === undefined || cell.text === null ? '' : String(cell.text);
+    var box = document.createElement('div');
+    box.className = 'widget widget-' + kind;
+
+    // A button-like control only carries an action, so it shows a label.
+    if (kind === 'button' || kind === 'toolbar' || kind.indexOf('rowbutton') >= 0) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'widget-btn';
+      btn.textContent = value || '操作';
+      btn.disabled = true;
+      box.appendChild(btn);
+      return box;
+    }
+
+    if (!w.editable) {
+      var ro = document.createElement('div');
+      ro.className = 'widget-readonly';
+      ro.textContent = value;
+      box.appendChild(ro);
+      return box;
+    }
+
+    var input;
+    if (kind === 'combo' || kind === 'multicombo' || kind === 'combocheckbox' ||
+        kind === 'dropdown' || kind === 'tree') {
+      input = document.createElement('select');
+      input.className = 'widget-input';
+      var blank = document.createElement('option');
+      blank.value = '';
+      blank.textContent = '';
+      input.appendChild(blank);
+      var opts = w.options || [];
+      var inOptions = false;
+      opts.forEach(function (opt) {
+        var o = document.createElement('option');
+        o.value = opt;
+        o.textContent = opt;
+        if (opt === value) {
+          o.selected = true;
+          inOptions = true;
+        }
+        input.appendChild(o);
+      });
+      if (value && !inOptions) {
+        // The current value is not among the options; keep it visible.
+        var extra = document.createElement('option');
+        extra.value = value;
+        extra.textContent = value;
+        extra.selected = true;
+        input.appendChild(extra);
+      }
+    } else if (kind === 'checkbox' || kind === 'checkboxgroup') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.className = 'widget-input widget-check';
+      input.checked = value === 'true' || value === '1' || value === '是';
+    } else if (kind === 'date') {
+      input = document.createElement('input');
+      input.type = 'date';
+      input.className = 'widget-input';
+      input.value = normalizeDate(value);
+    } else if (kind === 'textarea') {
+      input = document.createElement('textarea');
+      input.className = 'widget-input';
+      input.value = value;
+    } else if (kind === 'number' || kind === 'money' || kind === 'percent') {
+      input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'widget-input';
+      input.value = value.replace(/[^0-9.\-]/g, '');
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'widget-input';
+      input.value = value;
+      if (w.scanCode) input.setAttribute('inputmode', 'text');
+    }
+    input.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    input.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
+    box.appendChild(input);
+    if (w.description) box.title = w.description;
+    return box;
+  }
+
+  // pad2 left-pads a number to two digits.
+  function pad2(n) {
+    n = String(n);
+    return n.length >= 2 ? n : '0' + n;
+  }
+
+  // normalizeDate turns the report's date text into an <input type=date> value.
+  function normalizeDate(v) {
+    if (!v) return '';
+    var m = String(v).match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/);
+    if (!m) return '';
+    return m[1] + '-' + pad2(m[2]) + '-' + pad2(m[3]);
   }
 
   function applyCellStyle(el, s) {

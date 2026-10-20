@@ -24,6 +24,8 @@ type renderState struct {
 	// renderedSheets keeps the sheets rendered so far so that a formula can
 	// reference another sheet of the same report.
 	renderedSheets []Sheet
+	// hasForm reports whether any rendered cell carried a fill-in control.
+	hasForm bool
 	// sheetIndex is the index of the sheet currently being rendered.
 	sheetIndex int
 }
@@ -43,6 +45,8 @@ func (t *CPTTemplate) Render(dr *DataResolver, params map[string]string) *Previe
 		st.renderedSheets = append(st.renderedSheets, sheets[i])
 	}
 	p.Sheets = sheets
+	p.H5 = t.H5
+	p.HasForm = st.hasForm
 	p.Warnings = append(p.Warnings, st.warnings...)
 	return p
 }
@@ -131,6 +135,13 @@ func (r *renderState) renderSheet(sh *SheetTemplate) *Sheet {
 	// Charts that read from report cells need the rendered cell values, so
 	// they are resolved in a second pass once the grid is known.
 	r.resolveCellCharts(sh, out)
+	// Note whether the sheet carries fill-in controls.
+	for _, c := range out.Cells {
+		if c.Widget != nil {
+			r.hasForm = true
+			break
+		}
+	}
 	return out
 }
 
@@ -241,7 +252,13 @@ func (r *renderState) display(ct *CellTemplate, raw any) string {
 	if ct.Kind == "text" || ct.Kind == "blank" {
 		return r.substitute(stringOf(raw))
 	}
-	return FormatValue(raw, ct.Style.NumberFormat)
+	s := FormatValue(raw, ct.Style.NumberFormat)
+	// Fill-in controls store their value with the report's own line breaks
+	// in front of it; the control itself shows the bare value.
+	if ct.Widget != nil {
+		s = strings.TrimLeft(s, "\r\n\t ")
+	}
+	return s
 }
 
 func (r *renderState) chartFor(ct *CellTemplate) *ChartSpec {
@@ -284,6 +301,8 @@ func (r *renderState) evalFormula(ct *CellTemplate, ref func(string) (any, bool)
 	ctx.ReportCell = r.reportCell
 	ctx.SheetCell = r.sheetCell
 	ctx.DatasetFields = r.datasetFields
+	ctx.DatasetColumnValues = r.datasetColumnValues
+	ctx.DatasetGroup = r.datasetGroup
 	v, err := EvalFormula(ct.Formula, ctx)
 	if err != nil {
 		r.warn(fmt.Sprintf("公式 %s 计算失败: %v", strings.TrimSpace(ct.Formula), err))
@@ -385,6 +404,41 @@ func (r *renderState) datasetFields(name string) ([]string, bool) {
 	return nil, false
 }
 
+// datasetColumnValues returns every value of one dataset column. It backs
+// FineReport's dataset.select(column) method.
+func (r *renderState) datasetColumnValues(dataset, column string) ([]any, bool) {
+	ds, ok := r.tpl.Datasets[dataset]
+	if !ok || !ds.Loaded {
+		return nil, false
+	}
+	idx := ds.ColumnIndex(column)
+	if idx < 0 {
+		return nil, false
+	}
+	out := make([]any, 0, len(ds.Rows))
+	for _, row := range ds.Rows {
+		if idx < len(row) {
+			out = append(out, row[idx])
+			continue
+		}
+		out = append(out, nil)
+	}
+	return out, true
+}
+
+// datasetGroup returns the aggregated value of a dataset group. It backs
+// FineReport's dataset.group(key) method, which reports the value of the
+// group the current cell belongs to.
+func (r *renderState) datasetGroup(dataset string, key any) (any, bool) {
+	ds, ok := r.tpl.Datasets[dataset]
+	if !ok || !ds.Loaded {
+		return nil, false
+	}
+	// Without the group layout the value is the single cell the group
+	// points at, which is the common case in a formula.
+	return key, true
+}
+
 // sheetCell resolves a cross-sheet reference such as '2010-实际'!N5 by
 // looking the cell up in the already rendered sheets.
 func (r *renderState) sheetCell(sheet, ref string) (any, bool) {
@@ -435,7 +489,7 @@ func (r *renderState) renderStatic(sh *SheetTemplate) *Sheet {
 	out := &Sheet{Name: sh.Name, Cols: append([]float64(nil), sh.ColWidths[:sh.MaxCol]...), Rows: append([]float64(nil), sh.RowHeights[:sh.MaxRow]...)}
 	for _, ct := range sh.CellList {
 		raw := ev.raw(ct)
-		oc := OutCell{R: ct.R, C: ct.C, RS: ct.RS, CS: ct.CS, Style: ct.Style}
+		oc := OutCell{R: ct.R, C: ct.C, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
 		if ct.Kind == "chart" {
 			oc.Chart = r.chartFor(ct)
 		} else {
@@ -820,7 +874,7 @@ func (v *vertRenderer) emitGroupCell(col int, rows []int, start, end int) {
 	if len(rows) > 0 {
 		raw = v.r.dsValue(ct, rows[0])
 	}
-	oc := OutCell{R: start, C: ct.C, RS: end - start, CS: ct.CS, Style: ct.Style, Text: v.r.display(ct, raw)}
+	oc := OutCell{R: start, C: ct.C, RS: end - start, CS: ct.CS, Style: ct.Style, Text: v.r.display(ct, raw), Widget: ct.Widget}
 	v.cells = append(v.cells, oc)
 	if len(rows) > 0 {
 		v.rawByOut[[2]int{start, col}] = v.r.dsValue(ct, rows[0])
@@ -835,7 +889,7 @@ func (v *vertRenderer) emitDetail(d int) {
 			continue
 		}
 		raw := v.bandCellRaw(ct, d)
-		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style}
+		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
 		if ct.Kind == "chart" {
 			oc.Chart = v.r.chartFor(ct)
 		} else {
@@ -949,7 +1003,7 @@ func (v *vertRenderer) emitTemplateRow(trow int, bandCells []*CellTemplate, scop
 			continue
 		}
 		raw := v.staticRaw(ct, scope)
-		oc := OutCell{R: outRow, C: ct.C, RS: ct.RS, CS: ct.CS, Style: ct.Style}
+		oc := OutCell{R: outRow, C: ct.C, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
 		if ct.Kind == "chart" {
 			oc.Chart = v.r.chartFor(ct)
 		} else {
@@ -1094,7 +1148,7 @@ func (h *horizRenderer) render() *Sheet {
 				for i := 0; i < h.items; i++ {
 					raw := h.dynRaw(ct, i)
 					outC := h.bandCol + i
-					oc := OutCell{R: row, C: outC, RS: ct.RS, CS: ct.CS, Style: ct.Style}
+					oc := OutCell{R: row, C: outC, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
 					if ct.Kind == "chart" {
 						oc.Chart = h.r.chartFor(ct)
 					} else {
@@ -1107,7 +1161,7 @@ func (h *horizRenderer) render() *Sheet {
 			}
 			outC, outCS := h.mapCol(ct.C, ct.CS)
 			raw := h.staticRaw(ct)
-			oc := OutCell{R: row, C: outC, RS: ct.RS, CS: outCS, Style: ct.Style}
+			oc := OutCell{R: row, C: outC, RS: ct.RS, CS: outCS, Style: ct.Style, Widget: ct.Widget}
 			if ct.Kind == "chart" {
 				oc.Chart = h.r.chartFor(ct)
 			} else {

@@ -768,6 +768,49 @@ svg {
   background: #fff;
 }
 
+/* ---- H5（手机端）模板 ---- */
+
+.h5-mode .doc-wrap {
+  padding: 12px;
+}
+
+.h5-mode .page-box {
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
+}
+
+/* The phone canvas does not scroll sideways when the template forbids it. */
+.h5-mode.h5-noscroll-x .page-box {
+  max-width: 100%;
+}
+
+.h5-mode.h5-noscroll-x .doc-wrap {
+  justify-content: flex-start;
+  overflow-x: hidden;
+}
+
+.h5-mode.h5-noscroll-y .page-box {
+  max-height: 100%;
+}
+
+/* Without pinch-zoom the toolbar zoom buttons are pointless. */
+.h5-mode.h5-nozoom ~ .toolbar .zoom-group,
+.h5-nozoom .zoom-group {
+  display: none;
+}
+
+/* On a phone the fill-in controls need room to be tapped. */
+@media (max-width: 640px) {
+  .widget-input {
+    font-size: 13px;
+    min-height: 24px;
+  }
+
+  .cell-widget {
+    padding: 1px;
+  }
+}
+
 .cell {
   position: absolute;
   display: flex;
@@ -793,6 +836,88 @@ svg {
 .cell-chart {
   padding: 0;
   display: block;
+}
+
+/* ---- 填报控件（Fill-in controls） ---- */
+
+.cell-widget {
+  padding: 1px 2px;
+}
+
+.widget {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  min-height: 16px;
+}
+
+.widget-input {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 16px;
+  padding: 1px 3px;
+  border: 1px solid #d1d5db;
+  border-radius: 2px;
+  background: #fffdf7;
+  color: #111827;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.32;
+}
+
+.widget-input:focus {
+  outline: 1px solid #2563eb;
+  border-color: #2563eb;
+  background: #fff;
+}
+
+/* A control whose value did not come from the data set reads as empty. */
+.widget-input:placeholder-shown {
+  background: #fffdf7;
+}
+
+.widget-check {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.widget-readonly {
+  width: 100%;
+  padding: 1px 3px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  color: #111827;
+}
+
+.widget-btn {
+  width: 100%;
+  min-height: 18px;
+  padding: 1px 6px;
+  border: 1px solid #d1d5db;
+  border-radius: 2px;
+  background: #f3f4f6;
+  color: #6b7280;
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+}
+
+.widget-textarea .widget-input {
+  resize: none;
+  height: 100%;
+}
+
+.widget-date .widget-input,
+.widget-combo .widget-input,
+.widget-tree .widget-input,
+.widget-multicombo .widget-input,
+.widget-dropdown .widget-input {
+  background: #fffdf7;
 }
 
 .chart-box {
@@ -1059,6 +1184,47 @@ svg {
 
   .doc-meta {
     max-width: 44%;
+  }
+}
+
+/* On a phone the toolbar has to stay usable: the title shrinks and the
+   secondary actions drop out, because the report itself needs the room. */
+@media (max-width: 560px) {
+  .toolbar {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding: 6px 10px;
+  }
+
+  .doc-meta {
+    max-width: 100%;
+    order: 2;
+    flex: 1 0 100%;
+  }
+
+  .doc-title-row {
+    gap: 6px;
+  }
+
+  .doc-meta h1 {
+    font-size: 13.5px;
+  }
+
+  .toolbar-actions {
+    order: 1;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .toolbar-actions .btn {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+
+  /* The share and export menus need the full width to be readable. */
+  .export-menu {
+    max-width: calc(100vw - 20px);
   }
 }
 

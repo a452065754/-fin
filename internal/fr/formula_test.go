@@ -517,6 +517,68 @@ func TestFormulaTableDataFields(t *testing.T) {
 	}
 }
 
+func TestFormulaDatasetSelect(t *testing.T) {
+	ctx := NewEvalContext()
+	ctx.DatasetColumnValues = func(dataset, column string) ([]any, bool) {
+		switch dataset + "." + column {
+		case "ds1.销售额":
+			return []any{float64(100), float64(200), float64(300)}, true
+		case "ds1.公司名称":
+			return []any{"甲公司", "乙公司", "甲公司"}, true
+		}
+		return nil, false
+	}
+	// select returns every value of the column.
+	v := evalOK(t, "ds1.select(销售额)", ctx)
+	vec, ok := v.([]any)
+	if !ok || len(vec) != 3 {
+		t.Fatalf("select = %#v", v)
+	}
+	if vec[2] != float64(300) {
+		t.Errorf("select = %#v", vec)
+	}
+	// The values feed into the usual aggregate functions.
+	if got := evalNum(t, "SUM(ds1.select(销售额))", ctx); got != 600 {
+		t.Errorf("SUM(select) = %v, want 600", got)
+	}
+	if got := evalNum(t, "MAX(ds1.select(销售额))", ctx); got != 300 {
+		t.Errorf("MAX(select) = %v, want 300", got)
+	}
+	// A second argument filters the column by another column's value.
+	v = evalOK(t, "ds1.select(销售额, 公司名称=\"甲公司\")", ctx)
+	vec, _ = v.([]any)
+	if len(vec) != 2 {
+		t.Errorf("filtered select = %#v", v)
+	}
+	// An unknown column is an error.
+	if _, err := EvalFormula("ds1.select(不存在)", ctx); err == nil {
+		t.Error("expected unknown column to fail")
+	}
+}
+
+func TestFormulaDatasetGroup(t *testing.T) {
+	ctx := NewEvalContext()
+	ctx.DatasetGroup = func(dataset string, key any) (any, bool) {
+		if dataset == "ds1" {
+			return float64(42), true
+		}
+		return nil, false
+	}
+	if got := evalNum(t, "ds1.group(2011)", ctx); got != 42 {
+		t.Errorf("group = %v, want 42", got)
+	}
+}
+
+func TestFormulaUnknownDatasetMethod(t *testing.T) {
+	_, err := EvalFormula("ds1.nosuch(1)", NewEvalContext())
+	if err == nil {
+		t.Fatal("expected unknown dataset method to fail")
+	}
+	if !strings.Contains(err.Error(), "暂不支持") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestCellRefParts(t *testing.T) {
 	cases := []struct {
 		ref      string

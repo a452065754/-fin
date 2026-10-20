@@ -18,6 +18,9 @@ type CPTTemplate struct {
 	Datasets map[string]*Dataset
 	Params   []ParamDef
 	Warnings []string
+	// H5 holds the mobile layout parameters. It is nil for ordinary
+	// desktop templates.
+	H5 *H5Spec
 }
 
 type SheetTemplate struct {
@@ -60,6 +63,29 @@ type CellTemplate struct {
 	Dict         *DictSpec
 	Style        Style
 	ChartXML     *XNode
+	// Widget describes the fill-in control attached to the cell. It is nil
+	// for ordinary report cells.
+	Widget *WidgetSpec
+}
+
+// WidgetSpec describes a FineReport form control (填报控件). The control's
+// current value is the cell's own value; the widget only decides how the
+// value is presented and whether the user may change it.
+type WidgetSpec struct {
+	// Class is the control class, e.g. "com.fr.form.ui.NumberEditor".
+	Class string `json:"class,omitempty"`
+	// Kind is the short control name used by the frontend, e.g. "number".
+	Kind string `json:"kind,omitempty"`
+	// Editable reports whether the control accepts user input.
+	Editable bool `json:"editable"`
+	// Options holds the choices of a combo box or check box.
+	Options []string `json:"options,omitempty"`
+	// Description is the control's tooltip text.
+	Description string `json:"description,omitempty"`
+	// Bookmark is the mobile bookmark name, used to link controls.
+	Bookmark string `json:"bookmark,omitempty"`
+	// ScanCode reports whether the text control supports barcode scanning.
+	ScanCode bool `json:"scanCode,omitempty"`
 }
 
 func (t *CPTTemplate) DocTitle() string { return t.Name }
@@ -87,6 +113,7 @@ func ParseCPTBytes(data []byte, name, path string) (*CPTTemplate, error) {
 		Name:     name,
 		Styles:   ParseStyleList(root),
 		Datasets: ParseDatasets(root),
+		H5:       ParseH5(root),
 	}
 	t.Params = parseTemplateParams(root)
 	for _, rep := range root.ChildAll("Report") {
@@ -345,6 +372,9 @@ func parseCell(c *XNode, styles []Style) *CellTemplate {
 			}
 		}
 	}
+	// A fill-in control may sit next to the cell's value; the value itself
+	// is still read from the <O> element above.
+	ct.Widget = ParseWidget(c)
 	return ct
 }
 

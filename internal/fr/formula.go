@@ -29,6 +29,12 @@ type EvalContext struct {
 	DatasetColumn func(dataset, column string) (any, bool)
 	// DatasetFields lists the column names of a dataset.
 	DatasetFields func(dataset string) ([]string, bool)
+	// DatasetColumnValues returns every value of one dataset column. It is
+	// what FineReport's dataset.select(column) method does.
+	DatasetColumnValues func(dataset, column string) ([]any, bool)
+	// DatasetGroup returns the value of a dataset group, which is what
+	// FineReport's dataset.group(key) method does.
+	DatasetGroup func(dataset string, key any) (any, bool)
 }
 
 func NewEvalContext() *EvalContext {
@@ -136,6 +142,142 @@ func (e sheetRefExpr) eval(ctx *EvalContext) (any, error) {
 		return nil, fmt.Errorf("工作表 %s 中没有单元格 %s", e.sheet, e.ref)
 	}
 	return v, nil
+}
+
+// methodCallExpr evaluates a dataset method call such as
+// ds1.select(销售额) or ds1.group(2011).
+type methodCallExpr struct {
+	receiver string
+	method   string
+	args     []formulaExpr
+}
+
+// argText returns the raw text of an argument. It is used where FineReport
+// expects a name rather than a value, such as a dataset column or a filter
+// condition. A comparison is rendered back to its source form.
+func (e methodCallExpr) argText(i int) string {
+	if i >= len(e.args) {
+		return ""
+	}
+	switch a := e.args[i].(type) {
+	case litExpr:
+		return stringOf(a.v)
+	case identExpr:
+		return a.name
+	case paramExpr:
+		return a.name
+	case binExpr:
+		return exprText(a.l) + a.op + exprText(a.r)
+	}
+	return ""
+}
+
+// exprText renders a literal or identifier back to source text.
+func exprText(e formulaExpr) string {
+	switch a := e.(type) {
+	case litExpr:
+		return stringOf(a.v)
+	case identExpr:
+		return a.name
+	case paramExpr:
+		return a.name
+	}
+	return ""
+}
+
+func (e methodCallExpr) eval(ctx *EvalContext) (any, error) {
+	name := strings.ToLower(e.method)
+	switch name {
+	case "select":
+		if len(e.args) < 1 {
+			return nil, fmt.Errorf("%s.select 缺少列名", e.receiver)
+		}
+		// The column name is an identifier, not an expression, so it is
+		// taken verbatim instead of being evaluated.
+		col := e.argText(0)
+		if col == "" {
+			return nil, fmt.Errorf("%s.select 缺少列名", e.receiver)
+		}
+		if ctx.DatasetColumnValues == nil {
+			return nil, fmt.Errorf("无法读取数据集 %s", e.receiver)
+		}
+		values, ok := ctx.DatasetColumnValues(e.receiver, col)
+		if !ok {
+			return nil, fmt.Errorf("数据集 %s 中没有列 %s", e.receiver, col)
+		}
+		// A second argument filters the column by a condition such as
+		// "公司名称=B37". The condition is raw text, so its column name
+		// is taken verbatim instead of being evaluated.
+		if len(e.args) > 1 {
+			cond := e.argText(1)
+			if cond == "" {
+				return nil, fmt.Errorf("%s.select 的筛选条件无效", e.receiver)
+			}
+			filtered, err := filterByCondition(ctx, e.receiver, values, cond)
+			if err != nil {
+				return nil, err
+			}
+			values = filtered
+		}
+		return values, nil
+	case "group":
+		if len(e.args) < 1 {
+			return nil, fmt.Errorf("%s.group 缺少参数", e.receiver)
+		}
+		if ctx.DatasetGroup == nil {
+			return nil, fmt.Errorf("无法读取数据集 %s 的分组", e.receiver)
+		}
+		// The group key is a literal such as 2011.
+		key := e.argText(0)
+		if key == "" {
+			return nil, fmt.Errorf("%s.group 缺少参数", e.receiver)
+		}
+		v, ok := ctx.DatasetGroup(e.receiver, key)
+		if !ok {
+			return nil, fmt.Errorf("数据集 %s 中没有分组 %s", e.receiver, key)
+		}
+		return v, nil
+	}
+	return nil, fmt.Errorf("暂不支持的数据集方法 %s.%s", e.receiver, e.method)
+}
+
+// filterByCondition keeps the values whose row matches a condition written
+// as "column=reference", e.g. "公司名称=B37".
+func filterByCondition(ctx *EvalContext, dataset string, values []any, cond string) ([]any, error) {
+	cond = strings.TrimSpace(cond)
+	if cond == "" {
+		return values, nil
+	}
+	eq := strings.Index(cond, "=")
+	if eq < 0 {
+		return nil, fmt.Errorf("无法解析筛选条件 %q", cond)
+	}
+	colName := strings.TrimSpace(cond[:eq])
+	want := strings.TrimSpace(cond[eq+1:])
+	// The right hand side may be a cell reference.
+	wantValue := want
+	if ctx.Ref != nil {
+		if v, ok := ctx.Ref(strings.ToUpper(want)); ok {
+			wantValue = stringOf(v)
+		}
+	}
+	if ctx.DatasetColumnValues == nil {
+		return nil, fmt.Errorf("无法读取数据集列 %s", colName)
+	}
+	keys, ok := ctx.DatasetColumnValues(dataset, colName)
+	if !ok {
+		return nil, fmt.Errorf("数据集 %s 中没有列 %s", dataset, colName)
+	}
+	out := []any{}
+	for i, k := range keys {
+		if stringOf(k) != wantValue {
+			continue
+		}
+		if i < len(values) {
+			out = append(out, values[i])
+		}
+	}
+	return out, nil
 }
 
 type identExpr struct{ name string }
@@ -1460,6 +1602,7 @@ const (
 	tkSemi
 	tkColonPlus
 	tkSheet
+	tkDot
 )
 
 type token struct {
@@ -1610,6 +1753,16 @@ func lexFormula(s string) ([]token, error) {
 		case c == ':':
 			toks = append(toks, token{kind: tkColon, text: ":"})
 			i++
+		case c == '.':
+			// A dot after an identifier starts a method call such as
+			// ds1.select(销售额). A leading dot is a decimal point and is
+			// handled by the number branch above.
+			if len(toks) > 0 && toks[len(toks)-1].kind == tkIdent {
+				toks = append(toks, token{kind: tkDot, text: "."})
+				i++
+				continue
+			}
+			return nil, fmt.Errorf("无法识别的字符 '.'")
 		default:
 			op := ""
 			if i+1 < len(s) {
@@ -1882,6 +2035,40 @@ func (p *formulaParser) parsePrimary() (formulaExpr, error) {
 		p.next()
 		return e, nil
 	case tkIdent:
+		// A method call such as ds1.select(销售额) or ds1.group(2011).
+		if p.peek().kind == tkDot {
+			p.next()
+			method := p.next()
+			if method.kind != tkIdent {
+				return nil, fmt.Errorf("方法名无效")
+			}
+			if p.peek().kind != tkLParen {
+				return nil, fmt.Errorf("方法 %s 缺少左括号", method.text)
+			}
+			p.next()
+			call := methodCallExpr{receiver: t.text, method: method.text}
+			if p.peek().kind == tkRParen {
+				p.next()
+				return call, nil
+			}
+			for {
+				arg, err := p.parseComparison()
+				if err != nil {
+					return nil, err
+				}
+				call.args = append(call.args, arg)
+				if p.peek().kind == tkComma {
+					p.next()
+					continue
+				}
+				break
+			}
+			if p.peek().kind != tkRParen {
+				return nil, fmt.Errorf("方法 %s 缺少右括号", method.text)
+			}
+			p.next()
+			return call, nil
+		}
 		if p.peek().kind == tkLParen {
 			p.next()
 			call := callExpr{name: t.text}
