@@ -38,7 +38,9 @@
     }
     var initial = readHash();
     if (initial) {
-      loadPreview(initial, {});
+      // The hash carries the template path and its parameters, so a preview
+      // link can be shared as is.
+      loadPreview(initial.path, initial.params || {});
     }
   }
 
@@ -48,7 +50,8 @@
       'kindBadge', 'paramBar', 'reloadBtn', 'zoomOut', 'zoomIn', 'zoomLabel', 'zoomFit',
       'warnBtn', 'warnCount', 'pageTabs', 'stage', 'emptyState', 'loading', 'previewRoot',
       'warnPanel', 'warnList', 'warnClose', 'toggleSidebar', 'app',
-      'connBtn', 'connCount', 'connMask', 'connClose', 'connList', 'connHint'
+      'connBtn', 'connCount', 'connMask', 'connClose', 'connList', 'connHint',
+      'shareBtn'
     ].forEach(function (id) {
       els[id] = document.getElementById(id);
     });
@@ -85,6 +88,7 @@
     });
 
     els.reloadBtn.addEventListener('click', applyParams);
+    els.shareBtn.addEventListener('click', copyShareLink);
     els.zoomIn.addEventListener('click', function () {
       state.fit = false;
       state.zoom = Math.min(3, Math.round(((state.scale || 1) + 0.1) * 10) / 10);
@@ -300,7 +304,10 @@
 
   function openTemplate(path) {
     if (!path) return;
-    if (state.path !== path) state.params = {};
+    if (state.path !== path) {
+      // Restore the parameters used the last time this template was opened.
+      state.params = recallParams(path) || {};
+    }
     els.warnPanel.hidden = true;
     loadPreview(path, state.params);
   }
@@ -309,6 +316,7 @@
     var token = ++state.reqToken;
     state.params = params || {};
     state.path = path;
+    syncHash();
     showLoading(true);
     els.emptyState.hidden = true;
     els.previewRoot.hidden = true;
@@ -344,10 +352,11 @@
         els.emptyState.hidden = true;
         els.previewRoot.hidden = false;
         els.reloadBtn.disabled = false;
+        els.shareBtn.disabled = false;
         highlightActive();
-        try {
-          history.replaceState(null, '', '#' + encodeURIComponent(path));
-        } catch (e) { /* file:// */ }
+        // The address bar keeps the path and the parameters, so the link can
+        // be copied and shared as is.
+        syncHash();
       })
       .catch(function (err) {
         if (token !== state.reqToken) return;
@@ -393,6 +402,27 @@
     }
   }
 
+  // Remembers the parameters used for a template, so reopening it restores
+  // the last view instead of the bare defaults.
+  function rememberParams(path, params) {
+    if (!path) return;
+    try {
+      var saved = JSON.parse(localStorage.getItem('rv.params') || '{}');
+      saved[path] = params || {};
+      localStorage.setItem('rv.params', JSON.stringify(saved));
+    } catch (e) { /* storage may be unavailable */ }
+  }
+
+  // Reads back the remembered parameters of a template.
+  function recallParams(path) {
+    try {
+      var saved = JSON.parse(localStorage.getItem('rv.params') || '{}');
+      return saved[path] || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function renderParams(data) {
     els.paramBar.innerHTML = '';
     var params = data.params || [];
@@ -424,12 +454,49 @@
     els.paramBar.appendChild(apply);
   }
 
+  // Copies the current preview link to the clipboard. The link carries the
+  // template path and the parameters, so the recipient sees the same report.
+  function copyShareLink() {
+    if (!state.path) return;
+    syncHash();
+    var url = location.href;
+    var done = function (ok) {
+      toast(ok ? '链接已复制，可直接发给同事' : '复制失败，请手动复制地址栏');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(function () { done(true); }, function () {
+        done(fallbackCopy(url));
+      });
+      return;
+    }
+    done(fallbackCopy(url));
+  }
+
+  // Older browsers and non-secure origins have no clipboard API.
+  function fallbackCopy(text) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function applyParams() {
     if (!state.path) return;
     var params = {};
     Array.prototype.forEach.call(els.paramBar.querySelectorAll('input[data-param]'), function (input) {
       params[input.dataset.param] = input.value;
     });
+    rememberParams(state.path, params);
     loadPreview(state.path, params);
   }
 
@@ -1553,12 +1620,40 @@
     return out;
   }
 
+  // The address bar hash carries the preview link:
+  //   #path=<模板路径>&<参数名>=<参数值>
+  // It is what people copy to share a report with a particular set of
+  // parameters.
   function readHash() {
     try {
-      var raw = decodeURIComponent(location.hash.replace(/^#/, ''));
-      return raw || null;
+      var raw = location.hash.replace(/^#/, '');
+      if (!raw) return null;
+      var qs = new URLSearchParams(raw);
+      var path = qs.get('path');
+      if (!path) return null;
+      var params = {};
+      qs.forEach(function (value, key) {
+        if (key === 'path') return;
+        params[key] = value;
+      });
+      return { path: path, params: params };
     } catch (e) {
       return null;
+    }
+  }
+
+  // Writes the current preview into the address bar so the link can be copied.
+  function syncHash() {
+    if (!state.path) return;
+    var qs = new URLSearchParams();
+    qs.set('path', state.path);
+    Object.keys(state.params || {}).forEach(function (k) {
+      var v = state.params[k];
+      if (v !== undefined && v !== null && v !== '') qs.set(k, v);
+    });
+    var next = '#' + qs.toString();
+    if (location.hash !== next) {
+      history.replaceState(null, '', next);
     }
   }
 
