@@ -27,7 +27,7 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 
 ## 硬指标
 
-<!-- <!-- <!-- <!-- AUTO:STATUS:BEGIN -->
+<!-- <!-- <!-- <!-- <!-- AUTO:STATUS:BEGIN -->
 
 <!-- 本区块由 tools/gen_status.py 生成，请勿手改。改完跑一次即可。 -->
 
@@ -40,7 +40,7 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 | 前端代码 | 3301 行 | `wc -l` |
 | 可配置环境变量 | 5 个 | `FR_TEST_WEBROOT`、`FR_WEBROOT`、`RV_AUDIT_LOG`、`RV_PASSWORD`、`RV_USER` |
 
-<!-- AUTO:STATUS:END --> --> --> -->
+<!-- AUTO:STATUS:END --> --> --> --> -->
 
 以下几项依赖运行环境，手工维护：
 
