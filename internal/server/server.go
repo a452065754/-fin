@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,8 @@ type Server struct {
 	// templateTimes tracks when each cached entry's template was last
 	// modified, so an edited template is not served from the cache.
 	templateTimes *templateTimes
+	// audit records who looked at which report.
+	audit *AuditLog
 }
 
 type fvsEntry struct {
@@ -78,6 +81,13 @@ func New(webroot, reportlets string) (*Server, error) {
 		),
 		templateTimes: newTemplateTimes(),
 	}
+	// The audit log is optional: without a path the entries are only kept in
+	// memory and served by the API.
+	audit, aErr := NewAuditLog(os.Getenv("RV_AUDIT_LOG"))
+	if aErr != nil {
+		return nil, aErr
+	}
+	s.audit = audit
 	s.index = newTemplateIndex(absRep)
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/api/templates", s.handleTemplates)
@@ -85,11 +95,17 @@ func New(webroot, reportlets string) (*Server, error) {
 	s.mux.HandleFunc("/api/fvs/asset", s.handleAsset)
 	s.mux.HandleFunc("/api/connections", s.handleConnections)
 	s.mux.HandleFunc("/api/health", s.healthHandler)
+	s.mux.HandleFunc("/api/audit", s.handleAudit)
 	s.mux.Handle("/", http.FileServer(http.FS(webui.FS)))
 	return s, nil
 }
 
-func (s *Server) Close() { s.dr.Close() }
+func (s *Server) Close() {
+	if s.audit != nil {
+		s.audit.Close()
+	}
+	s.dr.Close()
+}
 
 // Handler returns the HTTP handler with the middleware chain applied:
 // request metrics and timeout first, then authentication, then the routes.
@@ -125,6 +141,25 @@ func (s *Server) rememberTemplateTime(abs, key string) {
 	s.templateTimes.set(key, st.ModTime())
 }
 
+// handleAudit returns the most recent audit entries.
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	entries := s.audit.Recent(limit)
+	if entries == nil {
+		entries = []AuditEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries": entries,
+		"count":   len(entries),
+		"file":    s.audit.Enabled(),
+	})
+}
+
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 	list, err := s.index.list()
 	if err != nil {
@@ -155,6 +190,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	// part. The cache is only valid while the template file is unchanged.
 	key := previewKey(rel, params)
 	if data, ok := s.cache.Get(key); ok && s.templateUnchanged(abs, key) {
+		s.auditRecord(r, "preview", rel, formatParams(params), http.StatusOK, 0)
 		w.Header().Set("X-Render-Ms", "0")
 		w.Header().Set("X-Cache", "HIT")
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -165,17 +201,20 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	p, err := s.render(abs, rel, params)
 	if err != nil {
+		s.auditRecord(r, "preview", rel, formatParams(params), http.StatusBadRequest, time.Since(start))
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	p.Path = rel
 	data, mErr := json.Marshal(p)
 	if mErr != nil {
+		s.auditRecord(r, "preview", rel, formatParams(params), http.StatusInternalServerError, time.Since(start))
 		writeError(w, http.StatusInternalServerError, mErr.Error())
 		return
 	}
 	s.cache.Put(key, data)
 	s.rememberTemplateTime(abs, key)
+	s.auditRecord(r, "preview", rel, formatParams(params), http.StatusOK, time.Since(start))
 	w.Header().Set("X-Render-Ms", fmt.Sprintf("%d", time.Since(start).Milliseconds()))
 	w.Header().Set("X-Cache", "MISS")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
