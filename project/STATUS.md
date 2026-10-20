@@ -29,7 +29,7 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 
 | 指标 | 值 | 怎么测的 |
 |---|---|---|
-| 测试用例 | 47 例全绿 | `go test ./...` |
+| 测试用例 | 55 例全绿 | `go test ./...` |
 | 模板扫描 | 1770 个 CPT+FVS | `GET /api/templates` |
 | 数据连接发现 | 14 个（sqlite/mysql/oracle/sqlserver） | `GET /api/connections` |
 | 图表类型识别 | 18 种 `spec.Kind` | `chart.go` 枚举比对 |

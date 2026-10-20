@@ -183,6 +183,7 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		"ready":       ready,
 		"total":       len(conns),
 		"metrics":     s.metrics.Snapshot(),
+		"cache":       s.cache.Stats(),
 	}
 	writeJSON(w, http.StatusOK, body)
 }
@@ -199,6 +200,18 @@ func parseDurationEnv(name string, def time.Duration) time.Duration {
 	// Also accept a plain number of seconds.
 	if n, err := strconv.Atoi(v); err == nil && n > 0 {
 		return time.Duration(n) * time.Second
+	}
+	return def
+}
+
+// parseIntEnv reads an integer from an environment variable.
+func parseIntEnv(name string, def int) int {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
 	}
 	return def
 }

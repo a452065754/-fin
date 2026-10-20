@@ -33,6 +33,11 @@ type Server struct {
 	auth *Auth
 	// requestTimeout bounds a single render; zero means no limit.
 	requestTimeout time.Duration
+	// cache holds recently rendered previews.
+	cache *PreviewCache
+	// templateTimes tracks when each cached entry's template was last
+	// modified, so an edited template is not served from the cache.
+	templateTimes *templateTimes
 }
 
 type fvsEntry struct {
@@ -67,6 +72,11 @@ func New(webroot, reportlets string) (*Server, error) {
 		metrics:        NewMetrics(),
 		auth:           NewAuth(),
 		requestTimeout: parseDurationEnv("RV_TIMEOUT", 60*time.Second),
+		cache: NewPreviewCache(
+			parseDurationEnv("RV_CACHE_TTL", 60*time.Second),
+			parseIntEnv("RV_CACHE_MAX", 64),
+		),
+		templateTimes: newTemplateTimes(),
 	}
 	s.index = newTemplateIndex(absRep)
 	s.mux = http.NewServeMux()
@@ -89,6 +99,30 @@ func (s *Server) Handler() http.Handler {
 		h = s.auth.Middleware(h)
 	}
 	return s.metrics.Middleware(h, s.requestTimeout)
+}
+
+// templateUnchanged reports whether the template file behind a cached entry
+// has not been modified since it was rendered.
+func (s *Server) templateUnchanged(abs, key string) bool {
+	want, ok := s.templateTimes.get(key)
+	if !ok {
+		return false
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return false
+	}
+	return st.ModTime().Equal(want)
+}
+
+// rememberTemplateTime records the modification time of the template a cached
+// entry was rendered from.
+func (s *Server) rememberTemplateTime(abs, key string) {
+	st, err := os.Stat(abs)
+	if err != nil {
+		return
+	}
+	s.templateTimes.set(key, st.ModTime())
 }
 
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +151,17 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		}
 		params[k] = vals[0]
 	}
+	// A cached preview is served straight away; rendering is the expensive
+	// part. The cache is only valid while the template file is unchanged.
+	key := previewKey(rel, params)
+	if data, ok := s.cache.Get(key); ok && s.templateUnchanged(abs, key) {
+		w.Header().Set("X-Render-Ms", "0")
+		w.Header().Set("X-Cache", "HIT")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+		return
+	}
 	start := time.Now()
 	p, err := s.render(abs, rel, params)
 	if err != nil {
@@ -124,8 +169,18 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.Path = rel
+	data, mErr := json.Marshal(p)
+	if mErr != nil {
+		writeError(w, http.StatusInternalServerError, mErr.Error())
+		return
+	}
+	s.cache.Put(key, data)
+	s.rememberTemplateTime(abs, key)
 	w.Header().Set("X-Render-Ms", fmt.Sprintf("%d", time.Since(start).Milliseconds()))
-	writeJSON(w, http.StatusOK, p)
+	w.Header().Set("X-Cache", "MISS")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) render(abs, rel string, params map[string]string) (*fr.Preview, error) {
