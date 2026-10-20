@@ -9,15 +9,42 @@
 
 ## 文档
 
+### 先看这里
+
 | 文档 | 读者 | 内容 |
 |---|---|---|
-| [部署手册](docs/部署.md) | 运维 / 实施 | 安装、配置、启动、验证、排障、卸载 |
-| [使用手册](docs/使用.md) | 业务用户 / 实施顾问 | 界面操作、HTTP 接口、图表支持范围 |
-| [开发手册](docs/开发.md) | 开发 / AI 接手 | 架构、模块约定、加新类型的流程、测试规矩 |
-| [交接文档](docs/交接.md) | 接手人 | 当前状态、缺口、仓库信息、踩坑清单 |
+| [project/INDEX.md](project/INDEX.md) | **所有人** | **项目索引与工作流程（唯一入口）** |
+| [project/STATUS.md](project/STATUS.md) | 所有人 | 一页速览：能做什么、不能做什么 |
+| [project/ROADMAP.md](project/ROADMAP.md) | 所有人 | 产品规划与任务状态 |
 
-> 第一次接手请先读 [交接文档](docs/交接.md) 和
-> [开发手册](docs/开发.md) 第 4 节（关键内部约定）。
+### 专项文档
+
+| 文档 | 读者 | 内容 |
+|---|---|---|
+| [docs/部署.md](docs/部署.md) | 运维 / 实施 | 安装、配置、启动、验证、排障、卸载 |
+| [docs/使用.md](docs/使用.md) | 业务用户 / 实施顾问 | 界面操作、HTTP 接口、图表支持范围 |
+| [docs/开发.md](docs/开发.md) | 开发 / AI 接手 | 架构、模块约定、加新类型的流程、测试规矩 |
+| [docs/交接.md](docs/交接.md) | 接手人 | 项目全貌、接手须知、踩坑清单 |
+
+### 过程记录
+
+| 文档 | 性质 | 内容 |
+|---|---|---|
+| [project/PROGRESS.md](project/PROGRESS.md) | 只追加 | 每次做完了什么、怎么验证的 |
+| [project/LESSONS.md](project/LESSONS.md) | 只追加 | 踩过的坑与结论 |
+| [project/SKILLS.md](project/SKILLS.md) | 只追加 | 可复用的方法与命令模板 |
+
+> 第一次接手请先读 **[project/INDEX.md](project/INDEX.md)**，它有 5 分钟上手
+> 步骤和项目铁律。
+
+### 工作流程
+
+每个功能完成后必须更新知识库（STATUS / ROADMAP / PROGRESS / LESSONS /
+SKILLS），提交前跑文档自检：
+
+```bash
+python3 tools/verify_docs.py
+```
 
 ## 快速开始
 
@@ -120,4 +147,5 @@ webroot 不存在时相关用例会 skip 而非失败。
 
 ```bash
 gofmt -l . && go vet ./... && go test ./... && node --check web/app.js
+python3 tools/verify_docs.py
 ```
