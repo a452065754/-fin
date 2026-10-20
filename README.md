@@ -7,6 +7,18 @@
   内网服务器无需装 Node、Python 或任何数据库客户端。
 - **无 CGO**：`CGO_ENABLED=0`，交叉编译方便，产物自包含。
 
+## 文档
+
+| 文档 | 读者 | 内容 |
+|---|---|---|
+| [部署手册](docs/部署.md) | 运维 / 实施 | 安装、配置、启动、验证、排障、卸载 |
+| [使用手册](docs/使用.md) | 业务用户 / 实施顾问 | 界面操作、HTTP 接口、图表支持范围 |
+| [开发手册](docs/开发.md) | 开发 / AI 接手 | 架构、模块约定、加新类型的流程、测试规矩 |
+| [交接文档](docs/交接.md) | 接手人 | 当前状态、缺口、仓库信息、踩坑清单 |
+
+> 第一次接手请先读 [交接文档](docs/交接.md) 和
+> [开发手册](docs/开发.md) 第 4 节（关键内部约定）。
+
 ## 快速开始
 
 ```bash
@@ -18,6 +30,20 @@ FR_WEBROOT=D:\tomcat\webapps\webroot ./bin/reportviewer.exe   # 指定 webroot
 
 启动后浏览器打开提示的地址。左侧是模板树（支持搜索与 CPT/FVS 过滤），
 右侧是渲染结果。
+
+## 架构一览
+
+```
+cmd/reportviewer/main.go     入口：flag、webroot 探测、HTTP 启动
+internal/server/server.go    HTTP 层：4 个 API、路径白名单、模板树扫描
+internal/fr/                 解析与渲染核心（约 5000 行，不依赖 HTTP）
+  cpt.go / fvs.go            模板解析
+  dataset.go / connection.go 数据集与数据连接
+  embedded.go                内置数据解码（Ascii85 + raw Deflate）
+  formula.go / render.go     公式求值与表格渲染
+  chart.go / style.go        图表与样式
+web/                         内嵌前端（go:embed）+ 本地 echarts
+```
 
 ## 支持的模板能力
 
@@ -84,8 +110,14 @@ FINE_PWD_<UTF-8 十六进制>    连接名含中文时，如 气密检测77 → 
 
 ```bash
 export GOCACHE=$(pwd)/.gocache    # Windows 下若默认缓存目录不可写
-go test ./...
+go test ./...                     # 24 例
 ```
 
 测试依赖本机存在 FineReport webroot（默认 `F:/tomcat-win64/webapps/webroot`）。
 webroot 不存在时相关用例会 skip 而非失败。
+
+提交前检查：
+
+```bash
+gofmt -l . && go vet ./... && go test ./... && node --check web/app.js
+```
