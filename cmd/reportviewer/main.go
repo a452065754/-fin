@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"qdake/reportviewer/internal/server"
@@ -29,13 +33,40 @@ func main() {
 		Addr:              *addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	log.Printf("报表查看器已启动: %s", browserURL(*addr))
 	log.Printf("webroot:    %s", srv.Webroot)
 	log.Printf("reportlets: %s", srv.Reportlets)
-	if err := httpSrv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+
+	// Graceful shutdown: on SIGINT/SIGTERM stop accepting new connections
+	// and give the in-flight renders a moment to finish.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		log.Fatalf("服务异常退出: %v", err)
+	case sig := <-stop:
+		log.Printf("收到信号 %v，正在优雅停止…", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(ctx); err != nil {
+			log.Printf("停止超时，强制退出: %v", err)
+			_ = httpSrv.Close()
+		} else {
+			log.Printf("已停止")
+		}
 	}
 }
 

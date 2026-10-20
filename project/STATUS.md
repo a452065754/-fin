@@ -29,14 +29,14 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 
 | 指标 | 值 | 怎么测的 |
 |---|---|---|
-| 测试用例 | 39 例全绿 | `go test ./...` |
+| 测试用例 | 47 例全绿 | `go test ./...` |
 | 模板扫描 | 1770 个 CPT+FVS | `GET /api/templates` |
 | 数据连接发现 | 14 个（sqlite/mysql/oracle/sqlserver） | `GET /api/connections` |
 | 图表类型识别 | 18 种 `spec.Kind` | `chart.go` 枚举比对 |
 | Ascii85 解码一致性 | **718/718 与 FineReport 原版字节级一致** | Java oracle 逐条比对 |
 | Go 代码 | 7600 行 | `wc -l` |
 | 前端代码 | 约 2560 行 | `wc -l` |
-| HTTP 接口 | 4 个 | 路由表 |
+| HTTP 接口 | 5 个（含 /api/health） | 路由表 |
 | 单文件体积 | 25 MB（含 4 个纯 Go 驱动） | `ls -la bin/` |
 | 运行时依赖 | 0 | 无 Node/Python/JRE/DB 客户端 |
 

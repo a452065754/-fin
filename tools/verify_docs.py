@@ -152,13 +152,16 @@ def git(*args):
 
 def check_numbers():
     """文档里的关键数字要与代码实际一致。"""
-    # 测试用例数
+    # 测试用例数（所有包）
     count = 0
-    for name in os.listdir(os.path.join(ROOT, "internal", "fr")):
-        if name.endswith("_test.go"):
-            with open(os.path.join(ROOT, "internal", "fr", name),
-                      encoding="utf-8") as f:
-                count += len(re.findall(r"^func Test", f.read(), re.M))
+    for pkg in ("internal/fr", "internal/server"):
+        pkgdir = os.path.join(ROOT, pkg)
+        if not os.path.isdir(pkgdir):
+            continue
+        for name in os.listdir(pkgdir):
+            if name.endswith("_test.go"):
+                with open(os.path.join(pkgdir, name), encoding="utf-8") as f:
+                    count += len(re.findall(r"^func Test", f.read(), re.M))
     for doc in ("project/STATUS.md", "docs/交接.md", "README.md"):
         p = os.path.join(ROOT, doc)
         if not os.path.exists(p):

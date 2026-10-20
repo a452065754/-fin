@@ -26,6 +26,13 @@ type Server struct {
 	mux      *http.ServeMux
 	fvsMu    sync.Mutex
 	fvsCache map[string]*fvsEntry
+
+	// metrics counts requests for the health endpoint.
+	metrics *Metrics
+	// auth guards the endpoints when credentials are configured.
+	auth *Auth
+	// requestTimeout bounds a single render; zero means no limit.
+	requestTimeout time.Duration
 }
 
 type fvsEntry struct {
@@ -53,10 +60,13 @@ func New(webroot, reportlets string) (*Server, error) {
 		return nil, fmt.Errorf("reportlets 目录不存在: %s", absRep)
 	}
 	s := &Server{
-		Webroot:    absRoot,
-		Reportlets: absRep,
-		dr:         fr.NewDataResolver(absRoot),
-		fvsCache:   map[string]*fvsEntry{},
+		Webroot:        absRoot,
+		Reportlets:     absRep,
+		dr:             fr.NewDataResolver(absRoot),
+		fvsCache:       map[string]*fvsEntry{},
+		metrics:        NewMetrics(),
+		auth:           NewAuth(),
+		requestTimeout: parseDurationEnv("RV_TIMEOUT", 60*time.Second),
 	}
 	s.index = newTemplateIndex(absRep)
 	s.mux = http.NewServeMux()
@@ -64,13 +74,22 @@ func New(webroot, reportlets string) (*Server, error) {
 	s.mux.HandleFunc("/api/preview", s.handlePreview)
 	s.mux.HandleFunc("/api/fvs/asset", s.handleAsset)
 	s.mux.HandleFunc("/api/connections", s.handleConnections)
+	s.mux.HandleFunc("/api/health", s.healthHandler)
 	s.mux.Handle("/", http.FileServer(http.FS(webui.FS)))
 	return s, nil
 }
 
 func (s *Server) Close() { s.dr.Close() }
 
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler returns the HTTP handler with the middleware chain applied:
+// request metrics and timeout first, then authentication, then the routes.
+func (s *Server) Handler() http.Handler {
+	var h http.Handler = s.mux
+	if s.auth.Enabled() {
+		h = s.auth.Middleware(h)
+	}
+	return s.metrics.Middleware(h, s.requestTimeout)
+}
 
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 	list, err := s.index.list()
