@@ -994,7 +994,192 @@
       });
     }
 
-    var horizontal = kind === 'bar' && spec.horizontal;
+    if (kind === 'bubble') {
+      // Bubble charts carry the x value and a per-point radius alongside the y
+      // value, so they render as a scatter with a symbol size array.
+      var xs = spec.axisValues || [];
+      var pts = [];
+      series.forEach(function (s) {
+        (s.data || []).forEach(function (y, i) {
+          pts.push([Number(xs[i]) || i, Number(y) || 0, Number((s.size || [])[i]) || 8]);
+        });
+      });
+      if (!pts.length) return null;
+      return shallow(base, {
+        tooltip: { trigger: 'item', textStyle: { fontSize: 11, fontFamily: FONT_STACK } },
+        legend: legend,
+        grid: { left: 10, right: 12, top: gridTop, bottom: 6, containLabel: true },
+        xAxis: shallow(valAxis, { name: (spec.axisLabel || [])[0] || '', nameTextStyle: { fontSize: 10 } }),
+        yAxis: shallow(valAxis, { name: (spec.axisLabel || [])[1] || '', nameTextStyle: { fontSize: 10 } }),
+        series: [{
+          type: 'scatter',
+          data: pts,
+          symbolSize: function (d) { return d[2]; },
+          emphasis: { focus: 'series' }
+        }]
+      });
+    }
+
+    if (kind === 'combo') {
+      // FineReport mixes plot kinds per series; the backend resolved each one.
+      var hasY1 = series.some(function (s) { return s.axis === 'y1'; });
+      var comboSeries = series.map(function (s) {
+        var t = s.type || 'bar';
+        var o = { name: s.name || '', type: t === 'column' ? 'bar' : t, data: s.data || [], yAxisIndex: s.axis === 'y1' ? 1 : 0 };
+        if (o.type === 'line') {
+          o.symbol = 'circle';
+          o.symbolSize = 4;
+          o.lineStyle = { width: 2 };
+          if (o.yAxisIndex) o.lineStyle = { width: 2, type: 'dashed' };
+        } else if (o.type === 'bar') {
+          o.barMaxWidth = 28;
+          o.itemStyle = { borderRadius: [2, 2, 0, 0] };
+        }
+        return o;
+      });
+      return shallow(base, {
+        tooltip: { trigger: 'axis', textStyle: { fontSize: 11, fontFamily: FONT_STACK } },
+        legend: legend,
+        grid: {
+          left: (showLegend && legendPos === 'left') ? 92 : 10,
+          right: (hasY1 ? 46 : 12) + ((showLegend && legendPos === 'right') ? 76 : 0),
+          top: gridTop, bottom: 6, containLabel: true
+        },
+        xAxis: catAxis,
+        yAxis: hasY1 ? [valAxis, shallow(valAxis, { splitLine: { show: false } })] : valAxis,
+        series: comboSeries
+      });
+    }
+
+    if (kind === 'multipie') {
+      // Multi-layer pie becomes concentric rings, one per series.
+      var rings = series.map(function (s, i) {
+        return {
+          name: s.name || '',
+          type: 'pie',
+          radius: [32 + i * 13 + '%', 42 + i * 13 + '%'],
+          center: ['50%', hasTitle ? '56%' : '50%'],
+          label: { show: false },
+          labelLine: { show: false },
+          data: cats.map(function (c, j) { return { name: c, value: Number((s.data || [])[j]) || 0 }; })
+        };
+      }).filter(function (r) { return r.data.some(function (d) { return d.value; }); });
+      if (!rings.length) return null;
+      return shallow(base, {
+        tooltip: { trigger: 'item', textStyle: { fontSize: 11, fontFamily: FONT_STACK } },
+        legend: legend,
+        series: rings
+      });
+    }
+
+    if (kind === 'sunburst' || kind === 'treemap') {
+      // Hierarchy: nodes arrive as "parent / child" labels.
+      var treeData = (series[0] && series[0].data || []).map(function (v, i) {
+        var label = String(cats[i] == null ? '' : cats[i]);
+        var parts = label.split(' / ');
+        var node = { name: parts[parts.length - 1], value: Number(v) || 0 };
+        for (var k = parts.length - 2; k >= 0; k--) {
+          node = { name: parts[k], children: [node] };
+        }
+        return node;
+      });
+      if (!treeData.length) return null;
+      return shallow(base, {
+        tooltip: { trigger: 'item', textStyle: { fontSize: 11, fontFamily: FONT_STACK } },
+        legend: { show: false },
+        series: kind === 'treemap'
+          ? [{
+              type: 'treeMap', data: treeData, roam: false, nodeClick: false,
+              breadcrumb: { show: false },
+              label: { fontSize: 10, formatter: '{b}' },
+              upperLabel: { show: true, height: 16, fontSize: 10 },
+              itemStyle: { borderColor: '#fff', borderWidth: 1 },
+              splitArea: { show: false }
+            }]
+          : [{
+              type: 'sunburst', data: treeData, radius: ['12%', '78%'],
+              center: ['50%', hasTitle ? '56%' : '50%'],
+              label: { fontSize: 10, formatter: '{b}' },
+              itemStyle: { borderColor: '#fff', borderWidth: 1 }
+            }]
+      });
+    }
+
+    if (kind === 'heatmap') {
+      // Series carry one column per row; render the first as a value grid.
+      var hRows = series[0] && series[0].data || [];
+      var hCats = series[0] && series[0].name;
+      var cells = [];
+      cats.forEach(function (r, i) {
+        hRows.forEach(function (v, j) {
+          cells.push([j, i, Number(v) || 0]);
+        });
+      });
+      if (!cells.length) return null;
+      var hv = cells.map(function (c) { return c[2]; });
+      return shallow(base, {
+        tooltip: {
+          position: 'top', textStyle: { fontSize: 11, fontFamily: FONT_STACK },
+          formatter: function (p) { return cats[p.value[1]] + '<br>' + hCats + ': ' + formatNumber(p.value[2]); }
+        },
+        legend: { show: false },
+        grid: { left: 10, right: 12, top: gridTop, bottom: 40, containLabel: true },
+        xAxis: shallow(catAxis, { data: series.map(function (s) { return s.name; }), splitArea: { show: true } }),
+        yAxis: shallow(catAxis, { data: cats, splitArea: { show: true } }),
+        visualMap: {
+          min: Math.min.apply(null, hv), max: Math.max.apply(null, hv),
+          calculable: true, orient: 'horizontal', left: 'center', bottom: 4,
+          itemWidth: 10, itemHeight: 90, textStyle: { fontSize: 10 },
+          inRange: { color: ['#e8f1fb', '#9ec5e8', '#3b82c4'] }
+        },
+        series: [{
+          type: 'heatmap', data: cells,
+          label: { show: true, fontSize: 9, formatter: function (p) { return formatNumber(p.value[2]); } },
+          itemStyle: { borderColor: '#fff', borderWidth: 1 },
+          emphasis: { itemStyle: { shadowBlur: 6, shadowColor: 'rgba(0,0,0,.2)' } }
+        }]
+      });
+    }
+
+    if (kind === 'wordcloud') {
+      // Word cloud needs the echarts-wordcloud plugin, which is not bundled;
+      // fall back to a readable bar of the same frequencies.
+      kind = 'bar';
+    }
+
+    if (kind === 'map') {
+      // Country/region geometry needs an offline map dataset that is not
+      // bundled. Keep the data visible as a ranked bar list instead of an
+      // empty frame, so the numbers are still readable.
+      var ranked = [];
+      cats.forEach(function (c, i) {
+        var v = 0;
+        series.forEach(function (s) { v += Number((s.data || [])[i]) || 0; });
+        ranked.push({ name: c, value: v });
+      });
+      ranked = ranked.filter(function (r) { return r.name && r.value; });
+      ranked.sort(function (a, b) { return b.value - a.value; });
+      ranked = ranked.slice(0, 20).reverse();
+      if (!ranked.length) return null;
+      var areaNote = spec.mapArea ? spec.mapArea + (spec.drillDown ? '（钻取）' : '') : '';
+      return shallow(base, {
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, textStyle: { fontSize: 11, fontFamily: FONT_STACK } },
+        legend: { show: false },
+        title: hasTitle
+          ? base.title
+          : { show: true, text: areaNote, left: 'center', top: 4, textStyle: { fontSize: 12, color: '#6b7280', fontFamily: FONT_STACK } },
+        grid: { left: 10, right: 24, top: 26, bottom: 6, containLabel: true },
+        xAxis: shallow(valAxis, { name: areaNote || '', nameTextStyle: { fontSize: 10, color: '#98a2b3' } }),
+        yAxis: shallow(catAxis, { data: ranked.map(function (r) { return r.name; }) }),
+        series: [{
+          type: 'bar', data: ranked.map(function (r) { return r.value; }),
+          barMaxWidth: 18, itemStyle: { borderRadius: [0, 2, 2, 0] },
+          label: { show: true, position: 'right', fontSize: 10, formatter: function (p) { return formatNumber(p.value); } }
+        }]
+      });
+    }
+
+    var horizontal = kind === 'bar' || kind === 'gantt' ? !!spec.horizontal : false;
     var catAxis = {
       type: 'category',
       data: cats,
@@ -1030,7 +1215,14 @@
     };
 
     var chartSeries = series.map(function (s) {
-      var type = (kind === 'line' || kind === 'area') ? 'line' : kind === 'scatter' ? 'scatter' : 'bar';
+      var type;
+      if (kind === 'line' || kind === 'area') {
+        type = 'line';
+      } else if (kind === 'scatter' || kind === 'bubble') {
+        type = 'scatter';
+      } else {
+        type = 'bar';
+      }
       var o = {
         name: s.name || '',
         type: type,
@@ -1051,6 +1243,25 @@
       if (spec.stack && (type === 'bar' || type === 'line')) o.stack = 'total';
       return o;
     });
+
+    // A gantt bar is a duration anchored at an absolute start, so it needs the
+    // floating-bar form: [offset, offset + duration].
+    if (kind === 'gantt') {
+      var origin = (spec.axisValues && spec.axisValues.length) ? Number(spec.axisValues[0]) : 0;
+      chartSeries = chartSeries.map(function (s) {
+        return {
+          name: s.name,
+          type: 'bar',
+          stack: undefined,
+          data: (s.data || []).map(function (v) {
+            return [origin, origin + Number(v || 0)];
+          }),
+          barMaxWidth: 18,
+          itemStyle: { borderRadius: 2 },
+          emphasis: { focus: 'series' }
+        };
+      });
+    }
 
     return shallow(base, {
       tooltip: {

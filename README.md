@@ -26,6 +26,12 @@ FR_WEBROOT=D:\tomcat\webapps\webroot ./bin/reportviewer.exe   # 指定 webroot
 | CPT 表格（分组、汇总、合并单元格、跨页分栏） | ✅ |
 | CPT 公式（1193 行求值器） | ✅ |
 | CPT 图表（柱/线/面/饼/漏斗/散点/雷达/仪表） | ✅ |
+| 组合图（每个系列独立图型 + 双轴） | ✅ |
+| 气泡图（X/Y/半径三轴） | ✅ |
+| 甘特图（起止时间区间，支持子系列） | ✅ |
+| 层级图（父子结构 → 旭日图 / 矩形树图） | ✅ |
+| 多层饼图（同心环） | ✅ |
+| 热力图 | ✅ |
 | FVS 画布（文本/图片/图表/报表块/Tab 容器） | ✅ |
 | 数据源：内置离线数据（Ascii85+Deflate 解码） | ✅ |
 | 数据源：FRDemo SQLite | ✅ |
@@ -35,7 +41,9 @@ FR_WEBROOT=D:\tomcat\webapps\webroot ./bin/reportviewer.exe   # 指定 webroot
 
 以下情况不会中断渲染，而是在「渲染提示」面板里给出警告：
 
-- 地图、组合图、气泡图、多层饼图 → 降级为柱形图
+- 地图图 → 降级为排名条形图（未内置省市区地理数据，需要离线 GeoJSON 才能画出真地图）
+- 词云 → 降级为词频条形图（未内置 echarts-wordcloud 插件）
+- 箱型图 → 按系列绘制条形（ECharts 箱型图需原始五数概括，FineReport 模板中不落盘）
 - FVS 内嵌数据流被截断 → 使用可解码的部分
 - 未识别的 FVS 控件类型 → 跳过并告警
 

@@ -79,12 +79,29 @@ type ChartSpec struct {
 	Stack      bool          `json:"stack,omitempty"`
 	Horizontal bool          `json:"horizontal,omitempty"`
 	Warning    string        `json:"warning,omitempty"`
+
+	// FineReport charts that map onto no single ECharts type. The browser
+	// decides how faithfully it can draw them.
+	// Combo charts mix several plot kinds; Series[].Type carries the per
+	// series kind and is empty for ordinary charts.
+	Combo       bool      `json:"combo,omitempty"`
+	SizeRange   []float64 `json:"sizeRange,omitempty"`
+	MapArea     string    `json:"mapArea,omitempty"`
+	DrillDown   bool      `json:"drillDown,omitempty"`
+	ExtraAxis   int       `json:"extraAxis,omitempty"`
+	Horizontal2 bool      `json:"horizontal2,omitempty"`
+	AxisLabel   []string  `json:"axisLabel,omitempty"`
+	AxisValues  []float64 `json:"axisValues,omitempty"`
 }
 
 type ChartSeries struct {
 	Name string    `json:"name"`
 	Data []float64 `json:"data"`
 	Type string    `json:"type,omitempty"`
+	// Bubble charts need a third dimension: the point radius.
+	Size []float64 `json:"size,omitempty"`
+	// Dual-axis charts (combo line + bar) render against a second Y axis.
+	Axis string `json:"axis,omitempty"`
 }
 
 type FVSPage struct {
