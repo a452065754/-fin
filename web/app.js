@@ -44,10 +44,11 @@
 
   function cacheEls() {
     [
-      'search', 'filters', 'templateList', 'tplCount', 'backendInfo', 'docTitle', 'docPath',
+      'search', 'filters', 'templateList', 'tplCount', 'docTitle', 'docPath',
       'kindBadge', 'paramBar', 'reloadBtn', 'zoomOut', 'zoomIn', 'zoomLabel', 'zoomFit',
       'warnBtn', 'warnCount', 'pageTabs', 'stage', 'emptyState', 'loading', 'previewRoot',
-      'warnPanel', 'warnList', 'warnClose', 'toggleSidebar', 'app'
+      'warnPanel', 'warnList', 'warnClose', 'toggleSidebar', 'app',
+      'connBtn', 'connCount', 'connMask', 'connClose', 'connList', 'connHint'
     ].forEach(function (id) {
       els[id] = document.getElementById(id);
     });
@@ -73,6 +74,14 @@
       var btn = e.target.closest('.tpl');
       if (!btn) return;
       openTemplate(btn.dataset.path);
+    });
+
+    els.connBtn.addEventListener('click', showConnections);
+    els.connClose.addEventListener('click', function () {
+      els.connMask.hidden = true;
+    });
+    els.connMask.addEventListener('click', function (e) {
+      if (e.target === els.connMask) els.connMask.hidden = true;
     });
 
     els.reloadBtn.addEventListener('click', applyParams);
@@ -137,8 +146,6 @@
       .then(function (data) {
         state.templates = data.templates || [];
         els.tplCount.textContent = state.templates.length + ' 个模板';
-        var fvsCount = state.templates.filter(function (t) { return t.kind === 'fvs'; }).length;
-        els.backendInfo.textContent = 'Go 后端 · ' + fvsCount + ' FVS';
         renderList();
       })
       .catch(function (err) {
@@ -148,6 +155,63 @@
         box.textContent = '无法读取模板列表：' + err.message;
         els.templateList.appendChild(box);
         toast('无法读取模板列表：' + err.message);
+      });
+  }
+
+  // Connections declared in WEB-INF/embed/finedb. Passwords live in the
+  // environment, so the panel only reports which ones are ready to use.
+  function showConnections() {
+    els.connMask.hidden = false;
+    els.connList.innerHTML = '';
+    els.connHint.textContent = '正在读取…';
+    fetch('/api/connections')
+      .then(function (res) {
+        return res.json().then(function (data) {
+          if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          return data;
+        });
+      })
+      .then(function (data) {
+        var list = data.connections || [];
+        els.connCount.textContent = data.ready + '/' + data.total;
+        var missing = list.filter(function (c) {
+          return c.needsPassword && !c.resolved;
+        });
+        els.connHint.textContent = missing.length
+          ? ('共 ' + data.total + ' 个连接，' + data.ready + ' 个可用。缺少密码的连接需设置对应环境变量后重启本程序。')
+          : ('共 ' + data.total + ' 个连接，全部可用。');
+        list.forEach(function (c) {
+          var li = document.createElement('li');
+          li.className = 'conn-item';
+
+          var name = document.createElement('div');
+          name.className = 'conn-name';
+          name.textContent = c.name;
+
+          var meta = document.createElement('div');
+          meta.className = 'conn-meta';
+          meta.textContent = c.kind + (c.username ? ' · ' + c.username : '') + ' · ' + c.url;
+
+          var tag = document.createElement('span');
+          var ready = !c.needsPassword || c.resolved;
+          tag.className = 'conn-tag ' + (ready ? 'ok' : 'off');
+          tag.textContent = ready ? '可用' : '缺密码';
+
+          name.appendChild(tag);
+          li.appendChild(name);
+          li.appendChild(meta);
+
+          if (!ready) {
+            var hint = document.createElement('code');
+            hint.className = 'conn-env';
+            hint.textContent = c.passwordEnv;
+            li.appendChild(hint);
+          }
+          els.connList.appendChild(li);
+        });
+      })
+      .catch(function (err) {
+        els.connHint.textContent = '读取失败：' + err.message;
       });
   }
 

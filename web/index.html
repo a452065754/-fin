@@ -32,7 +32,7 @@
     </div>
     <div class="sidebar-foot">
       <span id="tplCount">—</span>
-      <span id="backendInfo">本地服务</span>
+      <button class="link-btn" id="connBtn" title="查看数据连接状态">数据源 <span id="connCount">—</span></button>
     </div>
   </aside>
 
@@ -97,6 +97,17 @@
       </div>
       <ul id="warnList"></ul>
     </aside>
+
+    <div class="modal-mask" id="connMask" hidden>
+      <div class="modal">
+        <div class="warn-head">
+          <strong>数据连接</strong>
+          <button class="icon-btn" id="connClose" aria-label="关闭">×</button>
+        </div>
+        <p class="conn-hint" id="connHint">—</p>
+        <ul class="conn-list" id="connList"></ul>
+      </div>
+    </div>
   </main>
 </div>
 <script src="/vendor/echarts.js"></script>

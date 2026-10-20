@@ -63,6 +63,7 @@ func New(webroot, reportlets string) (*Server, error) {
 	s.mux.HandleFunc("/api/templates", s.handleTemplates)
 	s.mux.HandleFunc("/api/preview", s.handlePreview)
 	s.mux.HandleFunc("/api/fvs/asset", s.handleAsset)
+	s.mux.HandleFunc("/api/connections", s.handleConnections)
 	s.mux.Handle("/", http.FileServer(http.FS(webui.FS)))
 	return s, nil
 }
@@ -215,6 +216,24 @@ func (s *Server) resolve(p string) (abs, rel string, err error) {
 		return "", "", fmt.Errorf("仅支持 .cpt 和 .fvs 文件")
 	}
 	return cand, filepath.ToSlash(r), nil
+}
+
+// handleConnections reports every datasource declared in the FineReport
+// installation plus whether its password is available. Passwords themselves
+// are never sent to the browser; only the env var name to set.
+func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
+	list := s.dr.Connections().List()
+	ready := 0
+	for _, c := range list {
+		if !c.NeedsPassword || c.Resolved {
+			ready++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"connections": list,
+		"total":       len(list),
+		"ready":       ready,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

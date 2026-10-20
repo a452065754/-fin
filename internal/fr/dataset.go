@@ -10,10 +10,17 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
+
+	// Pure-Go drivers keep the build CGO-free so reportviewer.exe stays a
+	// single self-contained binary on the intranet server.
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/microsoft/go-mssqldb"
+	_ "github.com/sijms/go-ora/v2"
 )
 
 // Dataset is one entry of the template's TableDataMap.
@@ -31,29 +38,57 @@ type Dataset struct {
 	loadKey     string
 }
 
-// DataResolver executes template datasets against the bundled SQLite database.
+// DataResolver executes template datasets against the datasources declared in
+// the FineReport installation. FRDemo ships with the product; every other
+// connection needs its password supplied through the environment.
 type DataResolver struct {
 	Webroot string
 
+	conns *Connections
+
 	mu      sync.Mutex
-	db      *sql.DB
-	dbPath  string
+	handles map[string]*connHandle
 	dicts   map[string]map[string]string
 	dictErr map[string]string
 }
 
+type connHandle struct {
+	mu   sync.Mutex
+	db   *sql.DB
+	path string
+}
+
 func NewDataResolver(webroot string) *DataResolver {
-	return &DataResolver{
+	dr := &DataResolver{
 		Webroot: webroot,
+		handles: map[string]*connHandle{},
 		dicts:   make(map[string]map[string]string),
 		dictErr: make(map[string]string),
 	}
+	if c, err := LoadConnections(webroot); err == nil {
+		dr.conns = c
+	} else {
+		// Fall back to the bundled demo database so FRDemo keeps working even
+		// when the embedded store is unreadable.
+		dr.conns = &Connections{items: map[string]*Connection{
+			"FRDemo": {Name: "FRDemo", Kind: "sqlite", URL: "jdbc:sqlite://${ENV_HOME}/../help/FRDemo.db"},
+		}, order: []string{"FRDemo"}}
+	}
+	return dr
 }
 
+// Connections exposes the parsed datasource catalogue for the UI.
+func (dr *DataResolver) Connections() *Connections { return dr.conns }
+
 func (dr *DataResolver) Close() {
-	if dr.db != nil {
-		dr.db.Close()
-		dr.db = nil
+	dr.mu.Lock()
+	hs := dr.handles
+	dr.handles = map[string]*connHandle{}
+	dr.mu.Unlock()
+	for _, h := range hs {
+		if h.db != nil {
+			h.db.Close()
+		}
 	}
 }
 
@@ -74,32 +109,76 @@ func (dr *DataResolver) frdemoPath() string {
 }
 
 func (dr *DataResolver) EnsureDB() error {
-	dr.mu.Lock()
-	defer dr.mu.Unlock()
-	return dr.ensureDBLocked()
+	_, err := dr.handle("FRDemo")
+	return err
 }
 
-func (dr *DataResolver) ensureDBLocked() error {
-	if dr.db != nil {
-		return nil
+// handle lazily opens a pooled connection for the named datasource.
+func (dr *DataResolver) handle(name string) (*connHandle, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "FRDemo"
 	}
-	path := dr.frdemoPath()
-	if st, err := os.Stat(path); err != nil || st.IsDir() {
-		return fmt.Errorf("找不到 FRDemo 数据库: %s", path)
+	key := strings.ToLower(name)
+
+	dr.mu.Lock()
+	h := dr.handles[key]
+	dr.mu.Unlock()
+	if h != nil && h.db != nil {
+		return h, nil
 	}
-	dsn := "file:" + filepath.ToSlash(path) + "?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(3000)"
-	db, err := sql.Open("sqlite", dsn)
+
+	c := dr.conns.Get(name)
+	if c == nil {
+		return nil, fmt.Errorf("未找到数据连接 %q（当前可用: %s）", name, strings.Join(dr.names(), ", "))
+	}
+	if c.NeedsPassword && os.Getenv(c.PasswordEnv) == "" {
+		return nil, fmt.Errorf("数据连接 %s 未配置密码，请设置环境变量 %s", c.Name, c.PasswordEnv)
+	}
+
+	dsn, err := BuildDSN(c, c.Password(), dr.Webroot)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	db, err := sql.Open(driverFor(c.Kind), dsn)
+	if err != nil {
+		return nil, fmt.Errorf("打开数据连接 %s 失败: %w", c.Name, err)
+	}
+	// Datasheets are read-only previews; keep one or two connections so a
+	// viewer instance never exhausts the source database pool.
 	db.SetMaxOpenConns(2)
+	db.SetConnMaxLifetime(30 * time.Minute)
 	if err := db.Ping(); err != nil {
 		db.Close()
-		return fmt.Errorf("打开 FRDemo 数据库失败: %w", err)
+		return nil, fmt.Errorf("连接数据源 %s 失败: %w", c.Name, err)
 	}
-	dr.db = db
-	dr.dbPath = path
-	return nil
+
+	h = &connHandle{db: db, path: dsn}
+	dr.mu.Lock()
+	dr.handles[key] = h
+	dr.mu.Unlock()
+	return h, nil
+}
+
+func (dr *DataResolver) names() []string {
+	var out []string
+	for _, c := range dr.conns.List() {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+func driverFor(kind string) string {
+	switch kind {
+	case "mysql":
+		return "mysql"
+	case "oracle":
+		return "oracle"
+	case "sqlserver":
+		return "sqlserver"
+	default:
+		return "sqlite"
+	}
 }
 
 // Query runs a read-only SELECT against the given FineReport connection name.
@@ -107,9 +186,6 @@ func (dr *DataResolver) Query(conn, query string) ([]string, [][]any, error) {
 	conn = strings.TrimSpace(conn)
 	if conn == "" {
 		conn = "FRDemo"
-	}
-	if !strings.EqualFold(conn, "FRDemo") {
-		return nil, nil, fmt.Errorf("暂不支持数据连接 %q（当前仅映射 FRDemo）", conn)
 	}
 	query = strings.TrimSpace(query)
 	query = strings.TrimSuffix(query, ";")
@@ -120,14 +196,13 @@ func (dr *DataResolver) Query(conn, query string) ([]string, [][]any, error) {
 	if !strings.HasPrefix(head, "SELECT") && !strings.HasPrefix(head, "WITH") {
 		return nil, nil, fmt.Errorf("仅允许 SELECT 查询")
 	}
-	dr.mu.Lock()
-	err := dr.ensureDBLocked()
-	db := dr.db
-	dr.mu.Unlock()
+	h, err := dr.handle(conn)
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := db.Query(query)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	rows, err := h.db.Query(query)
 	if err != nil {
 		return nil, nil, err
 	}
