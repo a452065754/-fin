@@ -1,10 +1,33 @@
 package fr
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-const webroot = `F:/tomcat-win64/webapps/webroot`
+// webroot points at the FineReport installation the tests read templates
+// from. Override it with the FR_TEST_WEBROOT environment variable; the tests
+// skip themselves when no installation is available, so CI can run without
+// FineReport present.
+var webroot = resolveTestWebroot()
+
+const defaultTestWebroot = `F:/tomcat-win64/webapps/webroot`
+
+func resolveTestWebroot() string {
+	if v := os.Getenv("FR_TEST_WEBROOT"); v != "" {
+		return v
+	}
+	return defaultTestWebroot
+}
+
+// requireWebroot skips the test when the FineReport installation is missing.
+func requireWebroot(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(webroot, "WEB-INF", "reportlets")); err != nil {
+		t.Skipf("未找到 FineReport 模板目录（%s），跳过。需要时用 FR_TEST_WEBROOT 指定", webroot)
+	}
+}
 
 func renderDemo(t *testing.T, path string) *Preview {
 	t.Helper()
@@ -22,6 +45,7 @@ func renderDemo(t *testing.T, path string) *Preview {
 }
 
 func TestGroupReport(t *testing.T) {
+	requireWebroot(t)
 	p := renderDemo(t, webroot+`/WEB-INF/reportlets/demo/basic/分组统计.cpt`)
 	sh := p.Sheets[0]
 	t.Logf("rows=%d cols=%d cells=%d warnings=%v", len(sh.Rows), len(sh.Cols), len(sh.Cells), p.Warnings)
@@ -41,6 +65,7 @@ func TestGroupReport(t *testing.T) {
 }
 
 func TestHorizontalReport(t *testing.T) {
+	requireWebroot(t)
 	p := renderDemo(t, webroot+`/WEB-INF/reportlets/demo/basic/列分栏.cpt`)
 	sh := p.Sheets[0]
 	t.Logf("rows=%d cols=%d cells=%d width=%.0f warnings=%v", len(sh.Rows), len(sh.Cols), len(sh.Cells), sh.Width, p.Warnings)
@@ -60,6 +85,7 @@ func TestHorizontalReport(t *testing.T) {
 }
 
 func TestColumnChart(t *testing.T) {
+	requireWebroot(t)
 	p := renderDemo(t, webroot+`/WEB-INF/reportlets/doc/Chart/ColumnChart/圆角属性和柱子宽度自定义柱形图.cpt`)
 	if len(p.Sheets) == 0 {
 		t.Fatal("no sheet")
@@ -82,6 +108,7 @@ func TestColumnChart(t *testing.T) {
 }
 
 func TestFVSInsurance(t *testing.T) {
+	requireWebroot(t)
 	tpl, err := ParseFVSFile(webroot + `/WEB-INF/reportlets/demo/analytics/保险数据大屏.fvs`)
 	if err != nil {
 		t.Fatalf("parse fvs: %v", err)
@@ -116,6 +143,7 @@ func TestFVSInsurance(t *testing.T) {
 }
 
 func TestFVSTabs(t *testing.T) {
+	requireWebroot(t)
 	tpl, err := ParseFVSFile(webroot + `/WEB-INF/reportlets/demo/analytics/XX证券公司年度计划表.fvs`)
 	if err != nil {
 		t.Fatalf("parse fvs: %v", err)

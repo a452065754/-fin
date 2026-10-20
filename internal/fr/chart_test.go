@@ -132,6 +132,7 @@ func TestChartHeatMap(t *testing.T) {
 // A box plot must be recognised as a box plot, even when its dataset cannot
 // be decoded.
 func TestChartBoxType(t *testing.T) {
+	requireWebroot(t)
 	p := renderDemo(t, webroot+`/WEB-INF/reportlets/doc/Chart/BoxPlot/分组箱型图.cpt`)
 	var found bool
 	for _, sh := range p.Sheets {
@@ -155,6 +156,7 @@ func TestChartBoxType(t *testing.T) {
 }
 
 func TestChartStructure(t *testing.T) {
+	requireWebroot(t)
 	// This template's embedded dataset does not survive Ascii85/Deflate
 	// decoding, so there are no rows to draw. Assert the parsing behaviour
 	// rather than the data: the definition must be recognised as a hierarchy
@@ -237,6 +239,7 @@ func TestChartGauge(t *testing.T) {
 // and the corrupt ones must be reported as warnings rather than silently
 // producing a wrong number.
 func TestChartMultipleGauges(t *testing.T) {
+	requireWebroot(t)
 	p := renderDemo(t, webroot+`/WEB-INF/reportlets/demo/chart/basic/多个仪表盘.cpt`)
 	var gauges, withData int
 	for _, sh := range p.Sheets {
@@ -423,6 +426,7 @@ func TestChartBox(t *testing.T) {
 // asserts the parsing behaviour rather than the data. The data path is
 // covered by TestWordCloudWithData below.
 func TestChartWordCloud(t *testing.T) {
+	requireWebroot(t)
 	tpl, err := ParseCPTFile(webroot + `/WEB-INF/reportlets/doc/Chart/WorldCloud/词云图.cpt`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -506,6 +510,7 @@ func TestWordCloudWithData(t *testing.T) {
 
 // A word cloud must not be downgraded to a bar chart.
 func TestChartWordCloudNotDowngraded(t *testing.T) {
+	requireWebroot(t)
 	p := renderDemo(t, webroot+`/WEB-INF/reportlets/doc/Chart/WorldCloud/词云图.cpt`)
 	for _, w := range p.Warnings {
 		if strings.Contains(w, "降级") {
@@ -523,6 +528,7 @@ func min(a, b int) int {
 
 // No chart anywhere in the sample set may still be downgraded to a bar.
 func TestNoDowngradeWarnings(t *testing.T) {
+	requireWebroot(t)
 	samples := []string{
 		"demo/chart/DataVisualization/数据可视化.cpt",
 		"demo/analytics/Demo.cpt",

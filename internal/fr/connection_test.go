@@ -9,6 +9,7 @@ import (
 const testWebroot = `F:/tomcat-win64/webapps/webroot`
 
 func TestLoadConnections(t *testing.T) {
+	requireWebroot(t)
 	cs, err := LoadConnections(testWebroot)
 	if err != nil {
 		t.Skipf("webroot 不可用，跳过: %v", err)
@@ -165,6 +166,7 @@ func TestMissingPasswordIsActionable(t *testing.T) {
 
 // Every declared connection must resolve to a supported driver.
 func TestAllConnectionsHaveDriver(t *testing.T) {
+	requireWebroot(t)
 	cs, err := LoadConnections(testWebroot)
 	if err != nil {
 		t.Skipf("webroot 不可用，跳过: %v", err)

@@ -9,6 +9,7 @@ import (
 // be used when the request does not supply them, otherwise the query runs
 // with an empty placeholder and the dataset fails to load.
 func TestDatasetOwnParameters(t *testing.T) {
+	requireWebroot(t)
 	tpl, err := ParseCPTFile(webroot + `/WEB-INF/reportlets/GettingStarted.cpt`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -45,6 +46,7 @@ func TestDatasetOwnParameters(t *testing.T) {
 // A template whose dataset has its own parameters must still load, and its
 // report cells must carry real values.
 func TestTemplateWithDatasetParamsRenders(t *testing.T) {
+	requireWebroot(t)
 	p := renderDemo(t, webroot+`/WEB-INF/reportlets/GettingStarted.cpt`)
 	for _, w := range p.Warnings {
 		if strings.Contains(w, "数据集") {
@@ -69,6 +71,7 @@ func TestTemplateWithDatasetParamsRenders(t *testing.T) {
 // A chart whose data definition references report cells (=C3, =C4, =B4)
 // must be resolved from the rendered grid.
 func TestChartFromReportCells(t *testing.T) {
+	requireWebroot(t)
 	p := renderDemo(t, webroot+`/WEB-INF/reportlets/GettingStarted.cpt`)
 	var chart *ChartSpec
 	for _, sh := range p.Sheets {

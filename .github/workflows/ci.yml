@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: 构建与测试
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: 设置构建缓存
+        run: echo "GOCACHE=${{ github.workspace }}/.gocache" >> $env:GITHUB_ENV
+
+      - name: 格式检查
+        run: |
+          $out = gofmt -l cmd internal web tools
+          if ($out) {
+            Write-Output "以下文件未格式化："
+            Write-Output $out
+            gofmt -w cmd internal web tools
+            Write-Output "已自动格式化，请重新提交"
+            exit 1
+          }
+
+      - name: 静态检查
+        run: go vet ./...
+
+      - name: 单元测试
+        run: go test ./... -count=1
+
+      - name: 构建
+        run: go build -o reportviewer.exe ./cmd/reportviewer
+
+      - name: 前端语法检查
+        run: |
+          node --check web/app.js
+          node tools/tests/wordcloud_layout_test.mjs
+
+      - name: 文档自检
+        run: python tools/verify_docs.py
+
+      - name: 校验 Go 依赖版本锁定
+        run: go mod verify
