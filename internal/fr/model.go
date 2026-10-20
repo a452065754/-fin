@@ -92,6 +92,22 @@ type ChartSpec struct {
 	Horizontal2 bool      `json:"horizontal2,omitempty"`
 	AxisLabel   []string  `json:"axisLabel,omitempty"`
 	AxisValues  []float64 `json:"axisValues,omitempty"`
+
+	// Gauge scale. GaugeMin/GaugeMax come from the plot's MC_Attr; when
+	// GaugeAuto is set the browser may widen the scale to fit the data.
+	// No omitempty on the bounds: a zero minimum is meaningful and the
+	// browser needs to tell "min is 0" from "min is unknown".
+	GaugeMin   float64     `json:"gaugeMin"`
+	GaugeMax   float64     `json:"gaugeMax"`
+	GaugeAuto  bool        `json:"gaugeAuto,omitempty"`
+	GaugeBands []GaugeBand `json:"gaugeBands,omitempty"`
+}
+
+// GaugeBand is one coloured threshold band of a gauge dial.
+type GaugeBand struct {
+	Min   float64 `json:"min"`
+	Max   float64 `json:"max"`
+	Color string  `json:"color,omitempty"`
 }
 
 type ChartSeries struct {

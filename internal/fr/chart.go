@@ -111,6 +111,7 @@ func ParseChartSpec(chart *XNode, datasets map[string]*Dataset) (*ChartSpec, []s
 	spec.Colors = parseChartColors(plot)
 	parseChartTitle(chart, spec)
 	parseChartLegend(chart, spec)
+	parseGaugeRange(plot, spec)
 	parseChartData(chart, spec, datasets, warn)
 	decorateSeries(spec, plot)
 	if len(spec.Series) == 0 {
@@ -122,6 +123,71 @@ func ParseChartSpec(chart *XNode, datasets map[string]*Dataset) (*ChartSpec, []s
 		warn("雷达图数据不足，已降级为柱形图")
 	}
 	return spec, warns
+}
+
+// parseGaugeRange reads the gauge scale from the plot. FineReport stores it on
+// an MC_Attr node (main colour / range) next to a list of AC_Attr segments that
+// colour the value bands.
+//
+//	<MC_Attr minValue="0.0" maxValue="100.0" useType="0" areaNumber="5">
+//	<AC_Attr minValue="=80" maxValue="=100">
+//
+// useType=1 means the range is fixed as written; useType=0 lets the renderer
+// derive it from the data.
+func parseGaugeRange(plot *XNode, spec *ChartSpec) {
+	if spec.Kind != "gauge" {
+		return
+	}
+	mc := plot.Find("MC_Attr")
+	if mc == nil {
+		return
+	}
+	minV, okMin := parseMeterTarget(mc.Attr("minValue"))
+	maxV, okMax := parseMeterTarget(mc.Attr("maxValue"))
+	if okMin && okMax && maxV > minV {
+		spec.GaugeMin = minV
+		spec.GaugeMax = maxV
+		spec.GaugeAuto = mc.Attr("useType") == "0"
+	}
+	// Segment thresholds drive the coloured bands of the dial. FineReport
+	// writes them in two shapes: the colour either sits in a `color` attribute
+	// or in a <color><FineColor/></color> child.
+	for _, ac := range plot.FindAll("AC_Attr") {
+		lo, okLo := parseMeterTarget(ac.Attr("minValue"))
+		hi, okHi := parseMeterTarget(ac.Attr("maxValue"))
+		if !okLo || !okHi {
+			continue
+		}
+		// Some templates write the band upside down (min above max).
+		if hi < lo {
+			lo, hi = hi, lo
+		}
+		color := ""
+		if v := ac.Attr("color"); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				color = FRColor(n)
+			}
+		}
+		if color == "" {
+			if c := ac.Child("color"); c != nil {
+				if fc := c.Child("FineColor"); fc != nil {
+					if v, err := strconv.ParseInt(fc.Attr("color"), 10, 64); err == nil {
+						color = FRColor(v)
+					}
+				}
+			}
+		}
+		if color == "" {
+			if fc := ac.Child("FineColor"); fc != nil {
+				if v, err := strconv.ParseInt(fc.Attr("color"), 10, 64); err == nil {
+					color = FRColor(v)
+				}
+			}
+		}
+		spec.GaugeBands = append(spec.GaugeBands, GaugeBand{
+			Min: lo, Max: hi, Color: color,
+		})
+	}
 }
 
 // mapArea reads the geography selector of a map plot. FineReport stores it on
@@ -631,6 +697,101 @@ func parseStructureDefinition(inner *XNode, spec *ChartSpec, datasets map[string
 	return true
 }
 
+// parseMeterDefinition handles MeterTableDefinition, the data source of a
+// gauge chart. It names a category column and a value column directly, and
+// optionally carries a custom target value.
+//
+// FineReport's shape:
+//
+//	<MeterTableDefinition>
+//	  <TableData><Name>ds1</Name></TableData>
+//	  <MeterTable201109 meterType="1" name="类别名称" value="库存量"
+//	                     custom="true" customTarget="500"/>
+//	</MeterTableDefinition>
+func parseMeterDefinition(inner *XNode, spec *ChartSpec, datasets map[string]*Dataset, warn func(string)) bool {
+	mt := inner.Child("MeterTable201109")
+	if mt == nil {
+		mt = inner.Find("MeterTable201109")
+	}
+	if mt == nil {
+		return false
+	}
+	ds := datasetOf(inner, datasets)
+	if ds == nil {
+		warn("仪表盘引用的数据集不存在")
+		return false
+	}
+	if !ds.Loaded || len(ds.Rows) == 0 {
+		warn("仪表盘数据集没有数据")
+		return false
+	}
+	nameCol := mt.Attr("name")
+	valueCol := mt.Attr("value")
+	if valueCol == "" {
+		warn("仪表盘定义缺少数值列")
+		return false
+	}
+	nIdx := ds.ColumnIndex(nameCol)
+	vIdx := ds.ColumnIndex(valueCol)
+	if vIdx < 0 {
+		warn(fmt.Sprintf("仪表盘数据集 %s 缺少数值列 %s", ds.Name, valueCol))
+		return false
+	}
+
+	// Each row is one gauge pointer. A gauge usually shows a single value, but
+	// templates may carry several, so keep them all.
+	var cats []string
+	var vals []float64
+	for _, row := range ds.Rows {
+		v, ok := toFloat(cellValue(row, vIdx))
+		if !ok {
+			continue
+		}
+		label := ""
+		if nIdx >= 0 {
+			label = stringOf(cellValue(row, nIdx))
+		}
+		if label == "" {
+			label = valueCol
+		}
+		cats = append(cats, label)
+		vals = append(vals, v)
+	}
+	if len(vals) == 0 {
+		warn("仪表盘没有有效的数值")
+		return false
+	}
+
+	spec.Categories = cats
+	spec.Series = append(spec.Series, ChartSeries{
+		Name: firstNonEmpty(nameCol, valueCol),
+		Data: vals,
+		Type: "gauge",
+	})
+
+	// A custom target becomes the gauge's reference mark.
+	if mt.AttrBool("custom", false) {
+		if t := mt.Attr("customTarget"); t != "" {
+			if f, ok := parseMeterTarget(t); ok {
+				spec.AxisValues = []float64{f}
+			}
+		}
+	}
+	return true
+}
+
+// parseMeterTarget reads a target value that may be written as a plain number
+// or as a FineReport formula such as "=308.75".
+func parseMeterTarget(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "=")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	return toFloat(s)
+}
+
 func datasetOf(n *XNode, datasets map[string]*Dataset) *Dataset {
 	if n == nil {
 		return nil
@@ -745,6 +906,12 @@ func parseChartData(chart *XNode, spec *ChartSpec, datasets map[string]*Dataset,
 		}
 		if n := unwrapFirst(inner, "MoreNameCDDefinition"); n != nil {
 			inner = n
+		}
+	case strings.Contains(name, "Meter"):
+		// MeterTableDefinition names a category column and a value column
+		// directly; the gauge range lives on the plot instead.
+		if parseMeterDefinition(inner, spec, datasets, warn) {
+			return
 		}
 	case strings.Contains(name, "VanMap"), strings.Contains(name, "DillMap"), strings.Contains(name, "MapDefinition"):
 		// VanMapDefinition wraps the real definition in an areaDefinition node.

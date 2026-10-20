@@ -85,6 +85,7 @@ web/                         内嵌前端（go:embed）+ 本地 echarts
 | 层级图（父子结构 → 旭日图 / 矩形树图） | ✅ |
 | 多层饼图（同心环） | ✅ |
 | 热力图 | ✅ |
+| 仪表盘（数值 + 量程 + 阈值色带） | ✅ |
 | FVS 画布（文本/图片/图表/报表块/Tab 容器） | ✅ |
 | 数据源：内置离线数据（Ascii85+Deflate 解码） | ✅ |
 | 数据源：FRDemo SQLite | ✅ |
@@ -137,7 +138,7 @@ FINE_PWD_<UTF-8 十六进制>    连接名含中文时，如 气密检测77 → 
 
 ```bash
 export GOCACHE=$(pwd)/.gocache    # Windows 下若默认缓存目录不可写
-go test ./...                     # 24 例
+go test ./...                     # 28 例
 ```
 
 测试依赖本机存在 FineReport webroot（默认 `F:/tomcat-win64/webapps/webroot`）。

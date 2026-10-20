@@ -173,6 +173,123 @@ func TestChartStructure(t *testing.T) {
 	}
 }
 
+// A gauge chart must read its value from the meter data definition and know
+// its scale, so the browser can draw a real dial instead of an empty frame.
+func TestChartGauge(t *testing.T) {
+	c := firstChartOfKind(t, "demo/chart/basic/百分比环形仪表盘.cpt", "gauge")
+	t.Logf("kind=%s cats=%d series=%d 范围=[%v, %v] auto=%v bands=%d",
+		c.Kind, len(c.Categories), len(c.Series), c.GaugeMin, c.GaugeMax, c.GaugeAuto, len(c.GaugeBands))
+	if len(c.Series) == 0 {
+		t.Fatal("仪表盘没有数据系列")
+	}
+	total := 0
+	for _, s := range c.Series {
+		total += len(s.Data)
+	}
+	if total == 0 {
+		t.Fatal("仪表盘系列没有数据点")
+	}
+	if c.GaugeMax <= c.GaugeMin {
+		t.Errorf("仪表盘范围无效: [%v, %v]", c.GaugeMin, c.GaugeMax)
+	}
+	if len(c.GaugeBands) == 0 {
+		t.Error("仪表盘没有解析出阈值分段")
+	}
+	for _, b := range c.GaugeBands {
+		t.Logf("  段 [%v, %v] 颜色=%s", b.Min, b.Max, b.Color)
+		if b.Max <= b.Min {
+			t.Errorf("阈值分段范围无效: [%v, %v]", b.Min, b.Max)
+		}
+	}
+}
+
+// Several gauges in one template must all produce values.
+//
+// Two of the five gauges in this template point at a dataset whose embedded
+// payload is corrupt: FineReport's own Ascii85InputStream + Inflater also
+// fail on it (ZipException: invalid distance code), so the data cannot be
+// recovered by any decoder. Verified against the Java oracle in
+// tools/oracle/Ascii85Oracle.java — our Go decoder is byte-identical to
+// FineReport's for all 718 payloads in the template set.
+//
+// So the assertion is: every gauge whose dataset decoded must have a value,
+// and the corrupt ones must be reported as warnings rather than silently
+// producing a wrong number.
+func TestChartMultipleGauges(t *testing.T) {
+	p := renderDemo(t, webroot+`/WEB-INF/reportlets/demo/chart/basic/多个仪表盘.cpt`)
+	var gauges, withData int
+	for _, sh := range p.Sheets {
+		for _, c := range sh.Cells {
+			if c.Chart == nil || c.Chart.Kind != "gauge" {
+				continue
+			}
+			gauges++
+			if len(c.Chart.Series) > 0 && len(c.Chart.Series[0].Data) > 0 {
+				withData++
+				t.Logf("仪表盘 %d: 值=%v 范围=[%v, %v]", gauges,
+					c.Chart.Series[0].Data, c.Chart.GaugeMin, c.Chart.GaugeMax)
+			}
+		}
+	}
+	if gauges == 0 {
+		t.Fatal("多个仪表盘.cpt 中没有仪表盘图")
+	}
+	t.Logf("共 %d 个仪表盘，其中 %d 个有数据", gauges, withData)
+	if withData == 0 {
+		t.Fatal("所有仪表盘都没有数据")
+	}
+	// A gauge with no data must be explained by a warning, not silently blank.
+	if withData < gauges {
+		found := false
+		for _, w := range p.Warnings {
+			if strings.Contains(w, "仪表盘") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("有仪表盘无数据但没有相关告警: %v", p.Warnings)
+		}
+	}
+}
+
+// A gauge whose value column is the same as its name column still has to
+// produce a value.
+func TestChartGaugeSingleValue(t *testing.T) {
+	charts := chartsIn(t, "demo/Phone/dashboard/驾驶舱主页_名片-phone.cpt")
+	for _, c := range charts {
+		if c.Kind == "gauge" {
+			t.Logf("单值仪表盘: 值=%v 类别=%v", c.Series[0].Data, c.Categories)
+			if len(c.Series[0].Data) == 0 {
+				t.Error("单值仪表盘没有数据点")
+			}
+			return
+		}
+	}
+	t.Logf("该模板中没有仪表盘图（类型: %s）", kindsOf(charts))
+}
+
+// parseMeterTarget must accept both plain numbers and formula values.
+func TestParseMeterTarget(t *testing.T) {
+	cases := []struct {
+		in   string
+		want float64
+		ok   bool
+	}{
+		{"500", 500, true},
+		{"=308.75", 308.75, true},
+		{"  =80 ", 80, true},
+		{"0.0", 0, true},
+		{"", 0, false},
+		{"abc", 0, false},
+	}
+	for _, tc := range cases {
+		got, ok := parseMeterTarget(tc.in)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("parseMeterTarget(%q) = %v,%v 期望 %v,%v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
 // No chart anywhere in the sample set may still be downgraded to a bar.
 func TestNoDowngradeWarnings(t *testing.T) {
 	samples := []string{

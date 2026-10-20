@@ -298,6 +298,37 @@ find . -name "*.go" -not -path "./tmpcheck/*" -exec wc -l {} + | tail -1
 > **坑**：`find ... | xargs wc -l` 在路径含中文/空格时会报
 > `assertion "bc_ctl.arg_max >= LINE_MAX" failed`。用 `-exec ... +` 代替管道。
 
+### S4.5 · 用 Java 原版做基准对照（反汇编 + 直接调用）
+
+**场景**：解析结果和某个第三方产品对不上，猜参数猜不出来。
+
+```bash
+# 1. 找到对方的 class（FineReport 的在 WEB-INF/lib 里）
+cd /tmp && mkdir oracle && cd oracle
+unzip -o -q /f/tomcat-win64/webapps/webroot/WEB-INF/lib/fine-cbb-11.0.jar \
+    "com/fr/stable/Ascii85*"
+
+# 2. 反汇编看行为
+javap -c -p com/fr/stable/Ascii85InputStream.class
+
+# 3. 直接当库调用，输出 hex 作为 ground truth
+#    （注意：class 要放在 com/fr/stable/ 目录下，javac -cp . -d .）
+java -cp . Ascii85Oracle < payloads.txt > oracle.txt
+
+# 4. 与自己的实现逐条比对
+```
+
+**项目内的基准工具**：`tools/oracle/Ascii85Oracle.java`
+
+**要点**：
+
+- Java 源码用 **纯 ASCII**（本机 javac 默认 GBK，中文注释会报
+  `错误: 编码GBK的不可映射字符`），加 `-encoding UTF-8` 编译
+- 用 `Inflater` 直接喂数据时必须自己调 `setInput`，用
+  `InflaterInputStream` 更省事
+- 逐条比对脚本：读两行文件（载荷 / 期望 hex），比 hex
+- **结论**：本项目 718/718 条载荷与 Java 原版字节级一致
+
 ---
 
 ## S5. 交付流程

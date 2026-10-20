@@ -931,20 +931,62 @@
     }
 
     if (kind === 'gauge') {
-      var value = 0;
-      if (series[0] && series[0].data.length) value = Number(series[0].data[0]) || 0;
-      var max = Math.max(Math.abs(value) * 1.25, 100);
-      if (max < 10) max = 10;
+      // A gauge whose dataset could not be decoded has no series at all.
+      // Drawing it as zero would be a lie, so render nothing instead.
+      if (!series.length || !series[0] || !series[0].data || !series[0].data.length) {
+        return null;
+      }
+      // The backend supplies the dial scale (gaugeMin/gaugeMax) and the
+      // threshold bands, so the dial is drawn the way the template declares
+      // rather than guessed from the value.
+      var value = Number(series[0].data[0]) || 0;
+      var gMin = (typeof spec.gaugeMin === 'number') ? spec.gaugeMin : 0;
+      var gMax = (typeof spec.gaugeMax === 'number' && spec.gaugeMax > gMin) ? spec.gaugeMax : 0;
+      if (!gMax) {
+        gMax = Math.max(Math.abs(value) * 1.25, 100);
+        if (gMax < 10) gMax = 10;
+      }
+      var bands = spec.gaugeBands || [];
+      // FineReport's band thresholds sometimes exceed the declared axis range
+      // (a gauge may declare 0..100 while its bands run 0..600). Widen the
+      // scale so no band is clipped away.
+      bands.forEach(function (b) {
+        if (b.max > gMax) gMax = b.max;
+        if (b.min < gMin) gMin = b.min;
+      });
+      var axisColors = null;
+      if (bands.length) {
+        // Build the ECharts axis colour stops from the threshold bands.
+        var stops = bands.map(function (b) {
+          var from = ((b.min - gMin) / (gMax - gMin));
+          var to = ((b.max - gMin) / (gMax - gMin));
+          return [
+            Math.max(0, Math.min(1, from)),
+            Math.max(0, Math.min(1, to)),
+            b.color || colors[0]
+          ];
+        }).sort(function (a, b) { return a[0] - b[0]; });
+        axisColors = stops.map(function (s) { return [s[1], s[2]]; });
+      }
+      var target = null;
+      if (spec.axisValues && spec.axisValues.length) {
+        target = Number(spec.axisValues[0]);
+      }
       return shallow(base, {
         tooltip: { formatter: '{b}: {c}' },
         series: [{
           type: 'gauge',
-          min: 0,
-          max: Math.ceil(max),
+          min: gMin,
+          max: gMax,
           startAngle: 210,
           endAngle: -30,
           progress: { show: true, width: 10 },
-          axisLine: { lineStyle: { width: 10, color: [[1, '#e8eef7']] } },
+          axisLine: {
+            lineStyle: {
+              width: 10,
+              color: axisColors || [[1, '#e8eef7']]
+            }
+          },
           axisTick: { show: false },
           splitLine: { show: false },
           axisLabel: { distance: 12, fontSize: 9, color: '#98a2b3' },
