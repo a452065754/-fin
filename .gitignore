@@ -1,0 +1,19 @@
+# 调试残留：CDP 无头浏览器 profile（54M）
+tmpcheck/
+
+# 构建产物
+bin/
+*.exe
+*.exe~
+
+# Go 构建缓存 / 本地环境
+.gocache/
+.env
+
+# 测试输出快照（非日志，是 go test -v 的 stdout）
+grouplog.txt
+
+# 编辑器
+.idea/
+.vscode/
+*.swp

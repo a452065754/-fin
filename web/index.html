@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>报表查看器 · CPT / FVS</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">FR</div>
+      <div class="brand-text">
+        <strong>报表查看器</strong>
+        <span>CPT / FVS 兼容预览</span>
+      </div>
+    </div>
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+      <input id="search" type="search" placeholder="搜索模板名称或目录" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div class="filters" id="filters">
+      <button class="filter active" data-kind="all">全部</button>
+      <button class="filter" data-kind="cpt">CPT</button>
+      <button class="filter" data-kind="fvs">FVS</button>
+    </div>
+    <div class="template-list" id="templateList">
+      <div class="list-loading">正在扫描模板…</div>
+    </div>
+    <div class="sidebar-foot">
+      <span id="tplCount">—</span>
+      <span id="backendInfo">本地服务</span>
+    </div>
+  </aside>
+
+  <main id="main">
+    <header class="toolbar">
+      <button class="icon-btn" id="toggleSidebar" title="收起/展开模板列表" aria-label="切换侧栏">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+      </button>
+      <div class="doc-meta">
+        <div class="doc-title-row">
+          <h1 id="docTitle">选择一个报表模板</h1>
+          <span class="badge" id="kindBadge" hidden></span>
+        </div>
+        <p id="docPath">从左侧模板树打开 .cpt 或 .fvs 文件</p>
+      </div>
+      <div class="params" id="paramBar"></div>
+      <div class="toolbar-actions">
+        <button class="btn" id="reloadBtn" disabled>刷新</button>
+        <div class="zoom-group">
+          <button class="icon-btn" id="zoomOut" title="缩小" aria-label="缩小">−</button>
+          <span id="zoomLabel">100%</span>
+          <button class="icon-btn" id="zoomIn" title="放大" aria-label="放大">+</button>
+          <button class="btn ghost" id="zoomFit">适应</button>
+        </div>
+        <button class="btn warn-btn" id="warnBtn" hidden>
+          警告 <span id="warnCount">0</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="page-tabs" id="pageTabs" hidden></div>
+
+    <div class="stage" id="stage">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-art">
+          <svg viewBox="0 0 120 90" aria-hidden="true">
+            <rect x="8" y="10" width="104" height="70" rx="6"></rect>
+            <path d="M8 30h104M36 30v50"></path>
+            <path d="M52 48h44M52 60h32"></path>
+          </svg>
+        </div>
+        <h2>打开左侧的模板开始预览</h2>
+        <p>支持 FineReport 普通报表（.cpt）与 FineVis 大屏（.fvs）。数据来自模板内置数据或 FRDemo SQLite。</p>
+        <div class="empty-hints">
+          <span>CPT 单元格展开</span>
+          <span>公式与分组</span>
+          <span>图表</span>
+          <span>FVS 画布与选项卡</span>
+        </div>
+      </div>
+      <div class="loading" id="loading" hidden>
+        <div class="spinner"></div>
+        <p>正在渲染报表…</p>
+      </div>
+      <div class="preview-root" id="previewRoot" hidden></div>
+    </div>
+
+    <aside class="warn-panel" id="warnPanel" hidden>
+      <div class="warn-head">
+        <strong>渲染提示</strong>
+        <button class="icon-btn" id="warnClose" aria-label="关闭">×</button>
+      </div>
+      <ul id="warnList"></ul>
+    </aside>
+  </main>
+</div>
+<script src="/vendor/echarts.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
