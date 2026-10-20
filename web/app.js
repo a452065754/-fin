@@ -51,7 +51,7 @@
       'warnBtn', 'warnCount', 'pageTabs', 'stage', 'emptyState', 'loading', 'previewRoot',
       'warnPanel', 'warnList', 'warnClose', 'toggleSidebar', 'app',
       'connBtn', 'connCount', 'connMask', 'connClose', 'connList', 'connHint',
-      'shareBtn'
+      'shareBtn', 'exportBtn', 'exportMenu'
     ].forEach(function (id) {
       els[id] = document.getElementById(id);
     });
@@ -89,6 +89,21 @@
 
     els.reloadBtn.addEventListener('click', applyParams);
     els.shareBtn.addEventListener('click', copyShareLink);
+
+    els.exportBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      els.exportMenu.hidden = !els.exportMenu.hidden;
+    });
+    els.exportMenu.addEventListener('click', function (e) {
+      var btn = e.target.closest('button[data-export]');
+      if (!btn) return;
+      els.exportMenu.hidden = true;
+      exportReport(btn.dataset.export);
+    });
+    // Clicking anywhere else closes the menu.
+    document.addEventListener('click', function () {
+      els.exportMenu.hidden = true;
+    });
     els.zoomIn.addEventListener('click', function () {
       state.fit = false;
       state.zoom = Math.min(3, Math.round(((state.scale || 1) + 0.1) * 10) / 10);
@@ -353,6 +368,7 @@
         els.previewRoot.hidden = false;
         els.reloadBtn.disabled = false;
         els.shareBtn.disabled = false;
+        els.exportBtn.disabled = false;
         highlightActive();
         // The address bar keeps the path and the parameters, so the link can
         // be copied and shared as is.
@@ -488,6 +504,93 @@
     } catch (e) {
       return false;
     }
+  }
+
+  // ---------- export ----------
+
+  // Exports the current report. PNG captures the rendered canvas (charts are
+  // drawn on canvas, so the browser can hand over the pixels directly), while
+  // PDF goes through the browser's own print pipeline, which keeps text
+  // selectable and handles tables of any size.
+  function exportReport(kind) {
+    if (!state.path) return;
+    if (kind === 'pdf') {
+      exportPdf();
+      return;
+    }
+    exportPng();
+  }
+
+  function exportPng() {
+    var root = els.previewRoot;
+    var canvases = root ? root.querySelectorAll('canvas') : [];
+    if (!canvases.length) {
+      toast('该报表没有可导出的图表（表格报表请用「打印 / 另存为 PDF」）');
+      return;
+    }
+    try {
+      // Stack every chart into one image so the export is a single file.
+      var ratio = 2;
+      var gap = 12;
+      var width = 0;
+      var height = 0;
+      var total = 0;
+      Array.prototype.forEach.call(canvases, function (c) {
+        width = Math.max(width, c.width);
+        height += c.height;
+        total++;
+      });
+      height += gap * (total - 1);
+
+      var out = document.createElement('canvas');
+      out.width = width;
+      out.height = height;
+      var ctx = out.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      var y = 0;
+      Array.prototype.forEach.call(canvases, function (c) {
+        ctx.drawImage(c, 0, y);
+        y += c.height + gap;
+      });
+      var url = out.toDataURL('image/png');
+      downloadDataUrl(url, exportFileName() + '.png');
+      toast('已导出 ' + total + ' 个图表');
+    } catch (e) {
+      toast('导出失败：' + (e && e.message ? e.message : e));
+    }
+  }
+
+  function exportPdf() {
+    // The print stylesheet hides the chrome and lays the report out on one
+    // page, so the browser's "save as PDF" produces a clean document.
+    document.body.classList.add('exporting');
+    var restore = function () {
+      document.body.classList.remove('exporting');
+      window.removeEventListener('afterprint', restore);
+    };
+    window.addEventListener('afterprint', restore);
+    setTimeout(function () {
+      window.print();
+      // Some browsers do not fire afterprint.
+      setTimeout(restore, 1500);
+    }, 50);
+  }
+
+  function downloadDataUrl(dataUrl, filename) {
+    var a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  // Builds a safe file name from the report title.
+  function exportFileName() {
+    var name = (state.preview && (state.preview.title || state.preview.name)) ||
+               basename(state.path) || '报表';
+    return String(name).replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80);
   }
 
   function applyParams() {

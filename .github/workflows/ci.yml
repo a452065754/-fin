@@ -47,6 +47,7 @@ jobs:
           node --check web/app.js
           node tools/tests/wordcloud_layout_test.mjs
           node tools/tests/share_link_test.mjs
+          node tools/tests/export_test.mjs
 
       - name: 文档自检
         run: python tools/verify_docs.py

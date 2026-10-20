@@ -572,6 +572,45 @@ node tools/tests/share_link_test.mjs
 
 ---
 
+---
+
+### 阶段 O · 报表导出与打印样式（提交 `待提交`）
+
+**做了什么**
+
+P2-6 报表导出 + P2-5 打印样式：
+
+- 工具栏加「导出」下拉菜单，两个选项：
+  - **导出图片 (PNG)**：把当前页面里的所有图表**合成一张长图**下载。
+    图表画在 canvas 上，浏览器可直接取像素，2 倍分辨率
+  - **打印 / 另存为 PDF**：调起浏览器打印对话框，选「另存为 PDF」
+- 新增 `@media print` 打印样式：隐藏侧栏/工具栏/警告面板/弹窗，
+  报表按**原始尺寸**输出（不受窗口缩放影响），表头每页重复
+- 新增 `tools/tests/export_test.mjs` 检查导出功能各环节是否齐全
+
+**怎么验证的**
+
+```
+node tools/tests/export_test.mjs
+  PASS 存在函数 exportReport / exportPng / exportPdf / downloadDataUrl / exportFileName
+  PASS HTML 含 id="exportBtn" / id="exportMenu" / data-export="png" / data-export="pdf"
+  PASS 导出按钮已绑定事件 / 菜单项已绑定事件
+  PASS 存在打印样式 / 打印时隐藏侧栏 / 隐藏工具栏 / 恢复原始尺寸
+  PASS PNG 导出遍历所有画布
+```
+
+**关键决策**
+
+- **PDF 走浏览器原生打印**，不引第三方 PDF 库。理由：文本可选可搜、
+  表格自动分页、零依赖、浏览器里直接「另存为 PDF」。第三方库（如
+  jsPDF）要自己排版，表格多页会很难看
+- **PNG 只导图表**：纯表格报表没有 canvas，导不出整页。此时提示用户
+  改用打印（浏览器会把表格也画进去）
+- 打印样式里 `transform: none` 很重要 —— 否则报表会按窗口缩放比例打印，
+  出来的字很小
+
+---
+
 ## 进度条目模板
 
 ```markdown
@@ -609,4 +648,5 @@ node tools/tests/share_link_test.mjs
 | 1 | 2026-10-20 | K 预览缓存 | `b0db292` | 47 → 55 |
 | 1 | 2026-10-20 | L 审计日志 | `caffcea` | 55 → 61 |
 | 1 | 2026-10-20 | M CI | `675e39c` | 61 → 61 |
-| 1 | 2026-10-20 | N URL 分享 | 本次 | 61 → 61 |
+| 1 | 2026-10-20 | N URL 分享 | `9567bbb` | 61 → 61 |
+| 1 | 2026-10-20 | O 报表导出 | 本次 | 61 → 61 |

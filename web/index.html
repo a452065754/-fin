@@ -52,6 +52,13 @@
       <div class="toolbar-actions">
         <button class="btn" id="reloadBtn" disabled>刷新</button>
         <button class="btn" id="shareBtn" disabled title="复制当前报表的链接（含参数）">复制链接</button>
+        <div class="export-group">
+          <button class="btn" id="exportBtn" disabled title="导出当前报表">导出</button>
+          <div class="export-menu" id="exportMenu" hidden>
+            <button data-export="png">导出图片 (PNG)</button>
+            <button data-export="pdf">打印 / 另存为 PDF</button>
+          </div>
+        </div>
         <div class="zoom-group">
           <button class="icon-btn" id="zoomOut" title="缩小" aria-label="缩小">−</button>
           <span id="zoomLabel">100%</span>

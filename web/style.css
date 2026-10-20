@@ -1154,3 +1154,103 @@ svg {
   padding: 1px 7px;
   color: var(--accent);
 }
+
+/* ---------- 导出菜单 ---------- */
+
+.export-group {
+  position: relative;
+  display: inline-block;
+}
+
+.export-menu {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  z-index: 40;
+  min-width: 168px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.export-menu button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  font-size: 12px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.export-menu button:hover {
+  background: var(--bg);
+}
+
+/* ---------- 打印 / 另存为 PDF ---------- */
+
+@media print {
+  /* Hide the application chrome so only the report is printed. */
+  #sidebar,
+  .toolbar,
+  .sidebar-foot,
+  .page-tabs,
+  .warn-panel,
+  .modal-mask,
+  .toast {
+    display: none !important;
+  }
+
+  html,
+  body {
+    height: auto;
+    overflow: visible;
+    background: #fff;
+  }
+
+  #app {
+    display: block;
+  }
+
+  #main {
+    overflow: visible;
+  }
+
+  .stage {
+    overflow: visible;
+    padding: 0;
+  }
+
+  /* Show the report at its natural size, not scaled to the window. */
+  .page-scale {
+    transform: none !important;
+  }
+
+  .doc-wrap {
+    box-shadow: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .page-box {
+    box-shadow: none;
+    border: 0;
+  }
+
+  /* Keep the table header on every printed page. */
+  .doc-table th {
+    background: #f5f7fa !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .doc-table td,
+  .doc-table th {
+    border-color: #ccd3dd !important;
+  }
+}
