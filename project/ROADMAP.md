@@ -61,7 +61,7 @@
 | # | 任务 | 状态 | 影响面 | 验收标准 | 依赖 |
 |---|---|---|---|---|---|
 | P0-1 | 仪表盘数据定义 | ✅ | 53 处图表 | `MeterTableDefinition` 能取到数，gauge 图表有值；`TestChartGauge` 等 3 例通过 | 无 |
-| P0-2 | 引用单元格的数据定义 | ⏸ | 3 种定义 | `NormalReportDataDefinition` / `BubbleReportDefinition` / `MeterReportDefinition` 用 `=C3` 公式引用报表单元格，能解析出值 | 需先理清公式→单元格的值传递 |
+| P0-2 | 引用单元格的数据定义 | ✅ | 82 处定义 | `NormalReportDataDefinition` / `BubbleReportDefinition` / `MeterReportDefinition` 用 `=C3` 公式引用报表单元格，能解析出值。顺带修掉**数据集自身参数默认值不生效**的旧 bug | 无 |
 | P0-3 | 多数据源真机联调 | ❌ | 全部非 FRDemo | 在内网机器上对 14 个连接逐个验证：能连上、能查出数据、报错信息可读 | **需内网访问权** |
 | P0-4 | FVS 内嵌数据解码完整性 | ⚠️ | 718 段载荷中约 64% 解不出 | 已定位：**不是解码器问题**（与 FineReport 原始 Java 类 718/718 字节级一致），是模板文件本身的数据缺陷或加密。详见 LESSONS A7 | 已查明成因方向 |
 

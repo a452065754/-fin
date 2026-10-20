@@ -10,7 +10,7 @@
 
 | 分类 | 条目 |
 |---|---|
-| [A. 解析与数据](#a-解析与数据) | A1–A6 |
+| [A. 解析与数据](#a-解析与数据) | A1–A7 |
 | [B. 测试](#b-测试) | B1–B2 |
 | [C. 工具链与环境](#c-工具链与环境) | C1–C5 |
 | [D. 流程与协作](#d-流程与协作) | D1–D4 |
@@ -159,6 +159,44 @@ ground truth。基准工具保存在 `tools/oracle/Ascii85Oracle.java`。
 
 **附带经验**：项目里**已有** `decodeAscii85Java` 复刻了 Java 版行为，
 新做解码前先看它，别重复造。
+
+### A7 · 数据集自己的参数默认值，之前根本没生效
+
+**现象**：做「引用单元格的图表」时，图表取不到数。追下去发现根因不在图表，
+而在**数据集加载**。
+
+**根因**：模板的每个数据集可以自带参数与默认值：
+
+```xml
+<TableData name="ds1" class="com.fr.data.impl.DBTableData">
+  <Parameters>
+    <Parameter>
+      <Attributes name="地区"/>
+      <O><![CDATA[华东]]></O>
+    </Parameter>
+  </Parameters>
+  <Query><![CDATA[SELECT * FROM [销量]A where 地区 ='${地区}']]></Query>
+</TableData>
+```
+
+`Dataset.Load` 只把**请求参数**传进 `ExpandSQL`，完全忽略了数据集自己的
+默认值。请求没给「地区」时，`${地区}` 展开成空串 → SQL 变成
+`where 地区 =''` → 查不到行 → 数据集 `loaded=false` → 报告里所有单元格
+都是空的 → 引用单元格的图表自然也拿不到值。
+
+**影响面**：**所有带数据集参数的模板**，不止图表。这是长期存在的 bug。
+
+**结论**：
+
+1. 参数解析要分两层：**模板级**（`ReportParameterAttr`，已实现）和
+   **数据集级**（`<TableData><Parameters>`，本次补上）
+2. 合并规则：**请求参数 > 数据集默认值 > 空**
+3. `Dataset` 结构体加 `Params []ParamDef`，`effectiveParams` 做合并
+
+**怎么发现的**：不是一次想通的，是「图表取不到数 → 查单元格值 → 单元格
+也是空 → 查数据集 → `loaded=false` → 手工跑 SQL 有 25 行 → 对比发现
+只有走 `Load` 才有问题」这样逐层剥出来的。**遇到「数据不对」要从
+最底层往上查，别在表层猜。**
 
 ---
 

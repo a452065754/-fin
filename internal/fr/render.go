@@ -14,6 +14,13 @@ type renderState struct {
 	paramVal map[string]any
 	warnings []string
 	warnSeen map[string]bool
+
+	// cellValues holds the evaluated value of every report cell, keyed by
+	// sheet index then cell coordinates. Charts whose data definition points
+	// at report cells (rather than a dataset) read from here.
+	cellValues map[int]map[[2]int]any
+	// sheetIndex is the index of the sheet currently being rendered.
+	sheetIndex int
 }
 
 // Render expands the template with dataset data and request parameters.
@@ -21,7 +28,8 @@ func (t *CPTTemplate) Render(dr *DataResolver, params map[string]string) *Previe
 	p := &Preview{Path: t.Path, Name: t.Name, Kind: "cpt", Title: t.Name, Params: t.Params}
 	st := newRenderState(t, dr, params)
 	st.loadDatasets()
-	for _, sh := range t.Sheets {
+	for i, sh := range t.Sheets {
+		st.sheetIndex = i
 		p.Sheets = append(p.Sheets, *st.renderSheet(sh))
 	}
 	p.Warnings = append(p.Warnings, st.warnings...)
@@ -30,11 +38,13 @@ func (t *CPTTemplate) Render(dr *DataResolver, params map[string]string) *Previe
 
 func newRenderState(tpl *CPTTemplate, dr *DataResolver, params map[string]string) *renderState {
 	st := &renderState{
-		tpl:      tpl,
-		dr:       dr,
-		params:   params,
-		paramVal: map[string]any{},
-		warnSeen: map[string]bool{},
+		tpl:        tpl,
+		dr:         dr,
+		params:     params,
+		paramVal:   map[string]any{},
+		warnSeen:   map[string]bool{},
+		cellValues: map[int]map[[2]int]any{},
+		sheetIndex: -1,
 	}
 	for _, pd := range tpl.Params {
 		v := pd.Default
@@ -98,14 +108,93 @@ func (r *renderState) renderSheet(sh *SheetTemplate) *Sheet {
 			hCount++
 		}
 	}
+	var out *Sheet
 	switch {
 	case vCount > 0:
-		return r.renderVertical(sh)
+		out = r.renderVertical(sh)
 	case hCount > 0:
-		return r.renderHorizontal(sh)
+		out = r.renderHorizontal(sh)
 	default:
-		return r.renderStatic(sh)
+		out = r.renderStatic(sh)
 	}
+	// Charts that read from report cells need the rendered cell values, so
+	// they are resolved in a second pass once the grid is known.
+	r.resolveCellCharts(sh, out)
+	return out
+}
+
+// resolveCellCharts fills in charts whose data definition references report
+// cells instead of a dataset.
+func (r *renderState) resolveCellCharts(sh *SheetTemplate, out *Sheet) {
+	if out == nil {
+		return
+	}
+	// Collect the charts that need report-cell data.
+	var pending []*OutCell
+	for i := range out.Cells {
+		oc := &out.Cells[i]
+		if oc.Chart != nil && oc.Chart.NeedsCellSource {
+			pending = append(pending, oc)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	// Use the rendered grid values so that references like =C3 point at the
+	// expanded output, which is what the template author sees.
+	values := r.outputCellValues(out)
+	for _, oc := range pending {
+		src := chartSourceOf(oc.Chart)
+		if src == nil {
+			continue
+		}
+		cats, names, series, err := src.resolve(func(ref string) (any, bool) {
+			col, row, ok := CellRefParts(ref)
+			if !ok {
+				return nil, false
+			}
+			v, ok := values[[2]int{row, col}]
+			return v, ok
+		})
+		if err != nil {
+			r.warn("图表引用的报表单元格取不到值：" + err.Error())
+			continue
+		}
+		oc.Chart.Categories = cats
+		oc.Chart.Series = nil
+		for i, vals := range series {
+			name := ""
+			if i < len(names) {
+				name = names[i]
+			}
+			data := make([]float64, 0, len(vals))
+			for _, v := range vals {
+				if f, ok := toFloat(v); ok {
+					data = append(data, f)
+				}
+			}
+			oc.Chart.Series = append(oc.Chart.Series, ChartSeries{
+				Name: name,
+				Data: data,
+				Type: oc.Chart.Kind,
+			})
+		}
+		oc.Chart.NeedsCellSource = false
+	}
+}
+
+// outputCellValues maps the rendered grid back to cell values so that a
+// chart's cell reference (e.g. =C3) can be resolved. The output grid's text
+// is the display form; numbers keep their numeric meaning when possible.
+func (r *renderState) outputCellValues(out *Sheet) map[[2]int]any {
+	values := map[[2]int]any{}
+	for _, oc := range out.Cells {
+		if oc.Chart != nil {
+			continue
+		}
+		values[[2]int{oc.R, oc.C}] = oc.Text
+	}
+	return values
 }
 
 // ---------- value helpers ----------

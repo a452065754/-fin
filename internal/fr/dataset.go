@@ -36,6 +36,9 @@ type Dataset struct {
 	Err         string
 	Warnings    []string
 	loadKey     string
+	// Params are the dataset's own parameter defaults, declared inside its
+	// <Parameters> block. They act as fallbacks for the request parameters.
+	Params []ParamDef
 }
 
 // DataResolver executes template datasets against the datasources declared in
@@ -297,6 +300,7 @@ func ParseDatasets(workbook *XNode) map[string]*Dataset {
 		if ds.Name == "" {
 			continue
 		}
+		ds.Params = parseDatasetParams(td)
 		switch {
 		case strings.Contains(ds.ClassName, "DBTableData"):
 			if c := td.Find("Connection"); c != nil {
@@ -370,6 +374,57 @@ func splitTypes(s string) []string {
 	return parts
 }
 
+// parseDatasetParams reads a dataset's own <Parameters> block. A dataset may
+// declare its own parameters with defaults, which act as fallbacks when the
+// request does not supply them.
+//
+//	<Parameters>
+//	  <Parameter>
+//	    <Attributes name="地区"/>
+//	    <O><![CDATA[华东]]></O>
+//	  </Parameter>
+//	</Parameters>
+func parseDatasetParams(td *XNode) []ParamDef {
+	pa := td.Child("Parameters")
+	if pa == nil {
+		return nil
+	}
+	var out []ParamDef
+	for _, p := range pa.ChildAll("Parameter") {
+		name := p.Attr("name")
+		if a := p.Child("Attributes"); a != nil {
+			if n := a.Attr("name"); n != "" {
+				name = n
+			}
+		}
+		if name == "" {
+			continue
+		}
+		def := ""
+		if o := p.Child("O"); o != nil {
+			def = strings.TrimSpace(o.TextTrim())
+		}
+		out = append(out, ParamDef{Name: name, Default: def})
+	}
+	return out
+}
+
+// effectiveParams merges the request parameters with the dataset's own
+// defaults. The request wins.
+func (ds *Dataset) effectiveParams(params map[string]string) map[string]string {
+	if len(ds.Params) == 0 {
+		return params
+	}
+	out := make(map[string]string, len(params)+len(ds.Params))
+	for _, p := range ds.Params {
+		out[p.Name] = p.Default
+	}
+	for k, v := range params {
+		out[k] = v
+	}
+	return out
+}
+
 // Load executes the dataset. Database datasets are re-run when request
 // parameters change so cached FVS templates still honour previews.
 func (ds *Dataset) Load(dr *DataResolver, params map[string]string) error {
@@ -379,7 +434,8 @@ func (ds *Dataset) Load(dr *DataResolver, params map[string]string) error {
 			return nil
 		}
 	}
-	q, err := ExpandSQL(ds.Query, params)
+	effective := ds.effectiveParams(params)
+	q, err := ExpandSQL(ds.Query, effective)
 	if err != nil {
 		ds.Err = err.Error()
 		return err

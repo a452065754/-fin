@@ -17,7 +17,7 @@ export GOCACHE=/f/QDAKE/.gocache
 cd /f/QDAKE && go test ./...
 ```
 
-测试 28 例全绿即环境正常。测试依赖本机有 FineReport webroot
+测试 33 例全绿即环境正常。测试依赖本机有 FineReport webroot
 （`F:/tomcat-win64/webapps/webroot`），不存在时相关用例会 skip 而非失败。
 
 **接手时还要看**：[docs/开发.md](../docs/开发.md) 第 4 节（关键内部约定）
@@ -29,7 +29,7 @@ cd /f/QDAKE && go test ./...
 |---|---|
 | 项目 | reportviewer —— FineReport 11.0 模板离线查看器 |
 | 阶段 | 第 1 阶段（功能补全）进行中 |
-| 已交付 | 6 个提交，28 个测试全绿 |
+| 已交付 | 7 个提交，33 个测试全绿 |
 | 代码量 | Go 7445 行 + 前端 2500 行 |
 | 覆盖率 | CPT 表格/公式/图表、FVS 画布、4 类数据源 |
 | 主要缺口 | 仪表盘数据定义、引用单元格定义、地图 GeoJSON、真库联调 |

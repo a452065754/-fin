@@ -17,7 +17,8 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 | 看大屏（FVS） | ✅ | 文本/图片/图表/报表块/Tab 都能渲染 |
 | 看柱/线/面/饼/漏斗/散点/雷达图 | ✅ | |
 | 看组合图/气泡图/甘特图/层级图/热力图/多层饼 | ✅ | |
-| **看仪表盘** | ✅ | **本轮新增**：数值、量程、阈值分段色带都对 |
+| **看仪表盘** | ✅ | 数值、量程、阈值分段色带都对 |
+| **看引用报表单元格的图表** | ✅ | `=C3` 这类公式引用的图表能取到值 |
 | 查 FRDemo 演示库 | ✅ | 免密 |
 | 查 MySQL / Oracle / SQL Server | ⚠️ | 代码就绪，**未连真库验证** |
 | 看地图 | ⚠️ | 降级为排名条形（无 GeoJSON） |
@@ -28,12 +29,12 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 
 | 指标 | 值 | 怎么测的 |
 |---|---|---|
-| 测试用例 | 27 例全绿 | `go test ./...` |
+| 测试用例 | 33 例全绿 | `go test ./...` |
 | 模板扫描 | 1770 个 CPT+FVS | `GET /api/templates` |
 | 数据连接发现 | 14 个（sqlite/mysql/oracle/sqlserver） | `GET /api/connections` |
 | 图表类型识别 | 18 种 `spec.Kind` | `chart.go` 枚举比对 |
 | Ascii85 解码一致性 | **718/718 与 FineReport 原版字节级一致** | Java oracle 逐条比对 |
-| Go 代码 | 7480 行 | `wc -l` |
+| Go 代码 | 7600 行 | `wc -l` |
 | 前端代码 | 约 2560 行 | `wc -l` |
 | HTTP 接口 | 4 个 | 路由表 |
 | 单文件体积 | 25 MB（含 4 个纯 Go 驱动） | `ls -la bin/` |
@@ -62,9 +63,8 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 
 ## 下一步
 
-**P0-2：引用单元格的数据定义**。`NormalReportDataDefinition` /
-`BubbleReportDefinition` / `MeterReportDefinition` 三种都用 `=C3` 这样的
-公式引用报表单元格。做完顺带覆盖仪表盘报表版。详见 [ROADMAP.md](ROADMAP.md)。
+**P1-2：词云**。引入 `echarts-wordcloud` 插件（需打进 vendor 目录）。
+之后是 P1-3 箱型图、P1-1 地图 GeoJSON。详见 [ROADMAP.md](ROADMAP.md)。
 
 ## 风险提示
 

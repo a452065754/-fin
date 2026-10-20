@@ -138,7 +138,7 @@ FINE_PWD_<UTF-8 十六进制>    连接名含中文时，如 气密检测77 → 
 
 ```bash
 export GOCACHE=$(pwd)/.gocache    # Windows 下若默认缓存目录不可写
-go test ./...                     # 28 例
+go test ./...                     # 33 例
 ```
 
 测试依赖本机存在 FineReport webroot（默认 `F:/tomcat-win64/webapps/webroot`）。

@@ -101,6 +101,13 @@ type ChartSpec struct {
 	GaugeMax   float64     `json:"gaugeMax"`
 	GaugeAuto  bool        `json:"gaugeAuto,omitempty"`
 	GaugeBands []GaugeBand `json:"gaugeBands,omitempty"`
+
+	// NeedsCellSource marks a chart whose data comes from report cells
+	// rather than a dataset. The renderer fills it in a second pass.
+	NeedsCellSource bool `json:"-"`
+
+	// cellSource keeps the parsed cell references for that second pass.
+	cellSource *chartCellSource
 }
 
 // GaugeBand is one coloured threshold band of a gauge dial.

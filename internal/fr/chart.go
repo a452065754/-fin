@@ -913,6 +913,16 @@ func parseChartData(chart *XNode, spec *ChartSpec, datasets map[string]*Dataset,
 		if parseMeterDefinition(inner, spec, datasets, warn) {
 			return
 		}
+	case strings.Contains(name, "ReportDataDefinition"), strings.Contains(name, "ReportDefinition"):
+		// These definitions read the report's own cells through formulas such
+		// as =C3. The values are not available while parsing, so the chart is
+		// marked and resolved by the renderer in a second pass.
+		if src := parseChartCellSource(inner); src != nil {
+			spec.cellSource = src
+			spec.NeedsCellSource = true
+			spec.Series = nil
+			return
+		}
 	case strings.Contains(name, "VanMap"), strings.Contains(name, "DillMap"), strings.Contains(name, "MapDefinition"):
 		// VanMapDefinition wraps the real definition in an areaDefinition node.
 		if ad := inner.Find("areaDefinition"); ad != nil {
