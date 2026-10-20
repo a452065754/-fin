@@ -2,6 +2,8 @@ package fr
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -697,6 +699,163 @@ func parseStructureDefinition(inner *XNode, spec *ChartSpec, datasets map[string
 	return true
 }
 
+// parseBoxDefinition handles BoxTableDefinition, the data source of a box
+// plot. The template stores the raw values in a nested MoreNameCDDefinition:
+//
+//	<BoxTableDefinition>
+//	  <TableData><Name>茉莉花数据</Name></TableData>
+//	  <detailedDefinition class="...VanBoxMoreNameCDDefinition">
+//	    <MoreNameCDDefinition>
+//	      <CategoryName value="数据项"/>
+//	      <ChartSummaryColumn name="普通茉莉花" .../>
+//	    </MoreNameCDDefinition>
+//	  </detailedDefinition>
+//	  <resultDefinition class="...VanBoxTableResultDefinition">
+//	    <BoxTableResultDefinition>
+//	      <Attr categoryName="无" seriesName="无" maxLabel="最大值" .../>
+//	    </BoxTableResultDefinition>
+//	  </resultDefinition>
+//	</BoxTableDefinition>
+//
+// ECharts wants the five-number summary per category, so it is computed here
+// from the raw values.
+func parseBoxDefinition(inner *XNode, spec *ChartSpec, datasets map[string]*Dataset, warn func(string)) bool {
+	box := inner.Child("BoxTableDefinition")
+	if box == nil {
+		box = inner.Find("BoxTableDefinition")
+	}
+	if box == nil {
+		return false
+	}
+	// The detailed definition holds the actual values.
+	detail := box.Child("detailedDefinition")
+	if detail == nil {
+		detail = box.Find("detailedDefinition")
+	}
+	if detail == nil {
+		return false
+	}
+	md := detail.Find("MoreNameCDDefinition")
+	if md == nil {
+		md = detail.Find("OneValueCDDefinition")
+	}
+	if md == nil {
+		return false
+	}
+	ds := datasetOf(inner, datasets)
+	if ds == nil {
+		warn("箱型图引用的数据集不存在")
+		return false
+	}
+	if !ds.Loaded || len(ds.Rows) == 0 {
+		warn("箱型图数据集没有数据")
+		return false
+	}
+
+	// The value columns are the series; the category column groups them.
+	catCol := md.Child("CategoryName")
+	catName := ""
+	if catCol != nil {
+		catName = catCol.Attr("value")
+	}
+	var valueCols []string
+	var valueNames []string
+	for _, sc := range md.ChildAll("ChartSummaryColumn") {
+		valueCols = append(valueCols, sc.Attr("name"))
+		label := sc.Attr("customName")
+		if label == "" {
+			label = sc.Attr("name")
+		}
+		valueNames = append(valueNames, label)
+	}
+	if len(valueCols) == 0 {
+		warn("箱型图定义没有数值列")
+		return false
+	}
+	catIdx := ds.ColumnIndex(catName)
+
+	// Collect the raw values per (category, value column).
+	raw := map[string]map[string][]float64{}
+	catOrder := []string{}
+	catSeen := map[string]bool{}
+	for _, row := range ds.Rows {
+		cat := ""
+		if catIdx >= 0 {
+			cat = stringOf(cellValue(row, catIdx))
+		}
+		if !catSeen[cat] {
+			catSeen[cat] = true
+			catOrder = append(catOrder, cat)
+		}
+		for i, col := range valueCols {
+			idx := ds.ColumnIndex(col)
+			if idx < 0 {
+				continue
+			}
+			f, ok := toFloat(cellValue(row, idx))
+			if !ok {
+				continue
+			}
+			if raw[cat] == nil {
+				raw[cat] = map[string][]float64{}
+			}
+			raw[cat][valueNames[i]] = append(raw[cat][valueNames[i]], f)
+		}
+	}
+	if len(catOrder) == 0 {
+		warn("箱型图没有有效的分类")
+		return false
+	}
+
+	// One box per value column, with the categories on the x axis.
+	spec.Categories = catOrder
+	for _, name := range valueNames {
+		cs := ChartSeries{Name: name, Type: "box"}
+		for _, cat := range catOrder {
+			vals := raw[cat][name]
+			if len(vals) == 0 {
+				cs.BoxValues = append(cs.BoxValues, []float64{0, 0, 0, 0, 0})
+				continue
+			}
+			cs.BoxValues = append(cs.BoxValues, fiveNumberSummary(vals))
+		}
+		spec.Series = append(spec.Series, cs)
+	}
+	// The categories are the x axis, and the series are the boxes.
+	spec.BoxSummary = true
+	return true
+}
+
+// fiveNumberSummary computes [min, q1, median, q3, max] for a set of values,
+// which is the form ECharts' boxplot series expects.
+func fiveNumberSummary(vals []float64) []float64 {
+	if len(vals) == 0 {
+		return []float64{0, 0, 0, 0, 0}
+	}
+	sorted := append([]float64(nil), vals...)
+	sort.Float64s(sorted)
+	quantile := func(p float64) float64 {
+		if len(sorted) == 1 {
+			return sorted[0]
+		}
+		pos := p * float64(len(sorted)-1)
+		lo := int(math.Floor(pos))
+		hi := int(math.Ceil(pos))
+		if lo == hi {
+			return sorted[lo]
+		}
+		frac := pos - float64(lo)
+		return sorted[lo]*(1-frac) + sorted[hi]*frac
+	}
+	return []float64{
+		sorted[0],
+		quantile(0.25),
+		quantile(0.5),
+		quantile(0.75),
+		sorted[len(sorted)-1],
+	}
+}
+
 // parseWordCloudDefinition handles WordCloudTableDefinition, which names a
 // word column and a weight column:
 //
@@ -964,6 +1123,12 @@ func parseChartData(chart *XNode, spec *ChartSpec, datasets map[string]*Dataset,
 		}
 		if n := unwrapFirst(inner, "MoreNameCDDefinition"); n != nil {
 			inner = n
+		}
+	case strings.Contains(name, "Box"):
+		// BoxTableDefinition carries the raw values; the five-number summary
+		// is computed from them.
+		if parseBoxDefinition(inner, spec, datasets, warn) {
+			return
 		}
 	case strings.Contains(name, "WordCloud"):
 		// WordCloudTableDefinition names the word column and the weight column.

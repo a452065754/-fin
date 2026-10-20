@@ -1293,6 +1293,48 @@
       splitLine: { lineStyle: { color: '#eef1f5' } }
     };
 
+    if (kind === 'box') {
+      // A box plot series carries the five-number summary of every category
+      // rather than plain values.
+      var boxSeries = series.map(function (s) {
+        var vals = s.boxValues || [];
+        return {
+          name: s.name || '',
+          type: 'boxplot',
+          data: vals.map(function (v) {
+            return [v[0], v[1], v[2], v[3], v[4]];
+          })
+        };
+      });
+      if (!boxSeries.length) return null;
+      var boxTop = 12;
+      if (hasTitle) boxTop = titleBand + 6;
+      if (showLegend && legendPos !== 'bottom' && legendPos !== 'left' && legendPos !== 'right') {
+        boxTop += 18;
+      }
+      return shallow(base, {
+        tooltip: {
+          trigger: 'item',
+          textStyle: { fontSize: 11, fontFamily: FONT_STACK },
+          formatter: function (p) {
+            var v = p.data || [];
+            if (!v.length) return '';
+            return (p.seriesName || '') + '<br>' +
+              '最大值: ' + formatNumber(v[4]) + '<br>' +
+              '上四分位: ' + formatNumber(v[3]) + '<br>' +
+              '中位数: ' + formatNumber(v[2]) + '<br>' +
+              '下四分位: ' + formatNumber(v[1]) + '<br>' +
+              '最小值: ' + formatNumber(v[0]);
+          }
+        },
+        legend: legend,
+        grid: { left: 10, right: 12, top: boxTop, bottom: 6, containLabel: true },
+        xAxis: shallow(catAxis, { type: 'category', data: cats }),
+        yAxis: valAxis,
+        series: boxSeries
+      });
+    }
+
     var gridTop = 12;
     if (hasTitle) gridTop = titleBand + 6;
     if (showLegend && legendPos !== 'bottom' && legendPos !== 'left' && legendPos !== 'right') {

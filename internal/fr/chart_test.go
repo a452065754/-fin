@@ -1,6 +1,7 @@
 package fr
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -128,9 +129,29 @@ func TestChartHeatMap(t *testing.T) {
 	t.Logf("kind=%s series=%d cats=%d", c.Kind, len(c.Series), len(c.Categories))
 }
 
-func TestChartBox(t *testing.T) {
-	c := firstChartOfKind(t, "doc/Chart/BoxPlot/分组箱型图.cpt", "box")
-	t.Logf("kind=%s series=%d cats=%d", c.Kind, len(c.Series), len(c.Categories))
+// A box plot must be recognised as a box plot, even when its dataset cannot
+// be decoded.
+func TestChartBoxType(t *testing.T) {
+	p := renderDemo(t, webroot+`/WEB-INF/reportlets/doc/Chart/BoxPlot/分组箱型图.cpt`)
+	var found bool
+	for _, sh := range p.Sheets {
+		for _, c := range sh.Cells {
+			if c.Chart == nil {
+				continue
+			}
+			found = true
+			if c.Chart.Kind != "box" {
+				t.Errorf("箱型图类型应为 box，实际 %s", c.Chart.Kind)
+			}
+			if c.Chart.Warning != "" {
+				t.Errorf("箱型图不应带降级标记: %s", c.Chart.Warning)
+			}
+			t.Logf("箱型图: kind=%s 分类=%v 系列=%d", c.Chart.Kind, c.Chart.Categories, len(c.Chart.Series))
+		}
+	}
+	if !found {
+		t.Fatal("模板中没有图表")
+	}
 }
 
 func TestChartStructure(t *testing.T) {
@@ -292,6 +313,107 @@ func TestParseMeterTarget(t *testing.T) {
 
 // A word cloud must read its words and weights from the WordCloud data
 // definition rather than falling back to a bar chart.
+// The five-number summary must follow the usual quartile convention.
+func TestFiveNumberSummary(t *testing.T) {
+	// 1..5 -> min 1, q1 2, median 3, q3 4, max 5
+	got := fiveNumberSummary([]float64{5, 3, 1, 4, 2})
+	want := []float64{1, 2, 3, 4, 5}
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 1e-9 {
+			t.Errorf("五数概括[%d] = %v, 期望 %v (完整 %v)", i, got[i], want[i], got)
+		}
+	}
+	// A single value collapses to the same number five times.
+	one := fiveNumberSummary([]float64{7})
+	for i, v := range one {
+		if v != 7 {
+			t.Errorf("单值时五数概括[%d] = %v, 期望 7", i, v)
+		}
+	}
+	// Out-of-order input must be sorted first.
+	unsorted := fiveNumberSummary([]float64{9, 1, 5, 3, 7})
+	if unsorted[0] != 1 || unsorted[4] != 9 {
+		t.Errorf("未排序输入的五数概括错误: %v", unsorted)
+	}
+	// An empty set must not panic.
+	empty := fiveNumberSummary(nil)
+	if len(empty) != 5 {
+		t.Errorf("空输入的五数概括长度应为 5, 实际 %d", len(empty))
+	}
+}
+
+// A box plot must be recognised and produce five-number summaries per box.
+func TestChartBox(t *testing.T) {
+	// The bundled demo template's embedded data does not decode, so the data
+	// path is covered with a synthetic dataset shaped like FineReport's.
+	ds := &Dataset{
+		Name:        "茉莉花数据",
+		ClassName:   "com.fr.data.impl.EmbeddedTableData",
+		Columns:     []string{"数据项", "普通茉莉花", "宝珠茉莉花"},
+		ColumnTypes: []string{"java.lang.String", "java.lang.Integer", "java.lang.Integer"},
+		Rows: [][]any{
+			{"花长", 10, 20},
+			{"花长", 12, 22},
+			{"花长", 14, 24},
+			{"花长", 16, 26},
+			{"花长", 18, 28},
+			{"花宽", 5, 8},
+			{"花宽", 7, 10},
+			{"花宽", 9, 12},
+		},
+		Loaded: true,
+	}
+	xml := `<ChartDefinition><BoxTableDefinition>` +
+		`<TableData class="com.fr.data.impl.NameTableData"><Name><![CDATA[茉莉花数据]]></Name></TableData>` +
+		`<detailedDefinition class="com.fr.plugin.chart.box.data.VanBoxMoreNameCDDefinition">` +
+		`<MoreNameCDDefinition>` +
+		`<CategoryName value="数据项"/>` +
+		`<ChartSummaryColumn name="普通茉莉花" customName="普通茉莉花"/>` +
+		`<ChartSummaryColumn name="宝珠茉莉花" customName="宝珠茉莉花"/>` +
+		`</MoreNameCDDefinition></detailedDefinition>` +
+		`</BoxTableDefinition></ChartDefinition>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("xml: %v", err)
+	}
+	inner := root.Find("ChartDefinition").Children[0]
+	spec := &ChartSpec{Kind: "box", Legend: true}
+	var warns []string
+	parseBoxDefinition(inner, spec, map[string]*Dataset{"茉莉花数据": ds}, func(s string) {
+		warns = append(warns, s)
+	})
+	if len(warns) > 0 {
+		t.Fatalf("解析告警: %v", warns)
+	}
+	if len(spec.Categories) != 2 {
+		t.Errorf("分类应为 2 个（花长/花宽），实际 %v", spec.Categories)
+	}
+	if len(spec.Series) != 2 {
+		t.Fatalf("箱体系列应为 2 个，实际 %d", len(spec.Series))
+	}
+	for _, s := range spec.Series {
+		if len(s.BoxValues) != len(spec.Categories) {
+			t.Errorf("系列 %q 的箱体数 %d 与分类数 %d 不一致", s.Name, len(s.BoxValues), len(spec.Categories))
+			continue
+		}
+		for i, v := range s.BoxValues {
+			if len(v) != 5 {
+				t.Errorf("系列 %q 第 %d 个箱体应有 5 个数，实际 %d", s.Name, i, len(v))
+				continue
+			}
+			if v[0] > v[1] || v[1] > v[2] || v[2] > v[3] || v[3] > v[4] {
+				t.Errorf("系列 %q 第 %d 个箱体非单调: %v", s.Name, i, v)
+			}
+		}
+		t.Logf("系列 %q 箱体: %v", s.Name, s.BoxValues)
+	}
+	// The first box summarises 10,12,14,16,18.
+	first := spec.Series[0].BoxValues[0]
+	if math.Abs(first[0]-10) > 1e-9 || math.Abs(first[4]-18) > 1e-9 {
+		t.Errorf("花长-普通茉莉花 箱体应为 [10..18]，实际 %v", first)
+	}
+}
+
 // A word cloud must be recognised as such and read its word/weight columns
 // from the WordCloud data definition.
 //

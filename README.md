@@ -85,6 +85,8 @@ web/                         内嵌前端（go:embed）+ 本地 echarts
 | 层级图（父子结构 → 旭日图 / 矩形树图） | ✅ |
 | 多层饼图（同心环） | ✅ |
 | 热力图 | ✅ |
+| 词云（自研行填充布局） | ✅ |
+| 箱型图（从原始值算五数概括） | ✅ |
 | 仪表盘（数值 + 量程 + 阈值色带） | ✅ |
 | FVS 画布（文本/图片/图表/报表块/Tab 容器） | ✅ |
 | 数据源：内置离线数据（Ascii85+Deflate 解码） | ✅ |
@@ -96,8 +98,6 @@ web/                         内嵌前端（go:embed）+ 本地 echarts
 以下情况不会中断渲染，而是在「渲染提示」面板里给出警告：
 
 - 地图图 → 降级为排名条形图（未内置省市区地理数据，需要离线 GeoJSON 才能画出真地图）
-- 词云 → 降级为词频条形图（未内置 echarts-wordcloud 插件）
-- 箱型图 → 按系列绘制条形（ECharts 箱型图需原始五数概括，FineReport 模板中不落盘）
 - FVS 内嵌数据流被截断 → 使用可解码的部分
 - 未识别的 FVS 控件类型 → 跳过并告警
 
@@ -138,7 +138,7 @@ FINE_PWD_<UTF-8 十六进制>    连接名含中文时，如 气密检测77 → 
 
 ```bash
 export GOCACHE=$(pwd)/.gocache    # Windows 下若默认缓存目录不可写
-go test ./...                     # 36 例
+go test ./...                     # 39 例
 ```
 
 测试依赖本机存在 FineReport webroot（默认 `F:/tomcat-win64/webapps/webroot`）。

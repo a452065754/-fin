@@ -106,6 +106,10 @@ type ChartSpec struct {
 	// rather than a dataset. The renderer fills it in a second pass.
 	NeedsCellSource bool `json:"-"`
 
+	// BoxSummary marks a box plot, whose series carry five-number summaries
+	// instead of plain values.
+	BoxSummary bool `json:"-"`
+
 	// cellSource keeps the parsed cell references for that second pass.
 	cellSource *chartCellSource
 }
@@ -125,6 +129,9 @@ type ChartSeries struct {
 	Size []float64 `json:"size,omitempty"`
 	// Dual-axis charts (combo line + bar) render against a second Y axis.
 	Axis string `json:"axis,omitempty"`
+	// BoxValues holds the five-number summary [min, q1, median, q3, max] of
+	// each box, one entry per category.
+	BoxValues [][]float64 `json:"boxValues,omitempty"`
 }
 
 type FVSPage struct {
