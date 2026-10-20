@@ -27,17 +27,31 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 
 ## 硬指标
 
+<!-- <!-- <!-- <!-- AUTO:STATUS:BEGIN -->
+
+<!-- 本区块由 tools/gen_status.py 生成，请勿手改。改完跑一次即可。 -->
+
 | 指标 | 值 | 怎么测的 |
 |---|---|---|
-| 测试用例 | 66 例全绿 | `go test ./...` |
+| 测试用例 | 66 例 | `go test ./...` |
+| 图表类型 | 18 种 | `internal/fr/chart.go` 的 `spec.Kind` 枚举 |
+| HTTP 接口 | 7 个 | `internal/server/server.go` 的路由表 |
+| Go 代码 | 10267 行 | `wc -l` |
+| 前端代码 | 3301 行 | `wc -l` |
+| 可配置环境变量 | 5 个 | `FR_TEST_WEBROOT`、`FR_WEBROOT`、`RV_AUDIT_LOG`、`RV_PASSWORD`、`RV_USER` |
+
+<!-- AUTO:STATUS:END --> --> --> -->
+
+以下几项依赖运行环境，手工维护：
+
+| 指标 | 值 | 怎么测的 |
+|---|---|---|
 | 模板扫描 | 1770 个 CPT+FVS | `GET /api/templates` |
 | 数据连接发现 | 14 个（sqlite/mysql/oracle/sqlserver） | `GET /api/connections` |
-| 图表类型识别 | 18 种 `spec.Kind` | `chart.go` 枚举比对 |
 | Ascii85 解码一致性 | **718/718 与 FineReport 原版字节级一致** | Java oracle 逐条比对 |
-| Go 代码 | 7600 行 | `wc -l` |
-| 前端代码 | 约 2560 行 | `wc -l` |
-| HTTP 接口 | 7 个（含 /api/health、/api/audit、/api/perf） | 路由表 |
-| 单文件体积 | 25 MB（含 4 个纯 Go 驱动） | `ls -la bin/` |
+| 单文件体积 | 约 25 MB（含 4 个纯 Go 驱动） | `ls -la bin/` |
+
+> 刷新上面的自动区块：`python3 tools/gen_status.py`
 | 运行时依赖 | 0 | 无 Node/Python/JRE/DB 客户端 |
 
 ## 本轮（2026-10-20）做了什么

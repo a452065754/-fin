@@ -272,6 +272,48 @@ def check_index_complete():
     note("INDEX 链接完整")
 
 
+def check_generated_block():
+    """自动生成的硬指标区块必须是最新的。"""
+    status = os.path.join(PROJECT, "STATUS.md")
+    gen = os.path.join(ROOT, "tools", "gen_status.py")
+    if not os.path.isfile(status) or not os.path.isfile(gen):
+        err("缺少 project/STATUS.md 或 tools/gen_status.py")
+        return
+    with open(status, encoding="utf-8") as f:
+        content = f.read()
+    if "AUTO:STATUS:BEGIN" not in content:
+        err("STATUS.md 缺少 AUTO:STATUS 标记")
+        return
+    # 重新生成一份，和文件里的对比。比较时只取标记本身，
+    # 不含 HTML 注释的写法差异。
+    import subprocess
+    begin_mark = "AUTO:STATUS:BEGIN"
+    end_mark = "AUTO:STATUS:END"
+    try:
+        out = subprocess.check_output(
+            [sys.executable, gen, "--print"], cwd=ROOT, stderr=subprocess.DEVNULL
+        ).decode("utf-8", "replace")
+    except Exception as e:
+        warn("无法运行 gen_status.py: %s" % e)
+        return
+    # 文件里是 HTML 注释形式（<!-- AUTO:STATUS:BEGIN -->），
+    # 生成器输出的是纯标记，两边都只取「表格部分」来比，
+    # 避免标记写法与换行符造成假差异。
+    start = content.index(begin_mark)
+    end = content.index(end_mark) + len(end_mark)
+    expected = out.strip()
+
+    def table_of(text):
+        rows = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")
+                if ln.strip().startswith("|")]
+        return "\n".join(rows)
+
+    current_rows = table_of(content[start:end])
+    expected_rows = table_of(expected)
+    if current_rows != expected_rows:
+        err("STATUS.md 的自动指标区块已过期，跑 `python3 tools/gen_status.py` 刷新")
+
+
 def main():
     print("=" * 60)
     print("文档一致性自检")
@@ -284,6 +326,7 @@ def main():
     check_append_only()
     check_progress_consistency()
     check_index_complete()
+    check_generated_block()
 
     print()
     for n in notes:

@@ -49,6 +49,9 @@ jobs:
           node tools/tests/share_link_test.mjs
           node tools/tests/export_test.mjs
 
+      - name: 刷新状态快照
+        run: python tools/gen_status.py
+
       - name: 文档自检
         run: python tools/verify_docs.py
 
