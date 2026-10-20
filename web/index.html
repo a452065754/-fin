@@ -33,6 +33,7 @@
     <div class="sidebar-foot">
       <span id="tplCount">—</span>
       <button class="link-btn" id="connBtn" title="查看数据连接状态">数据源 <span id="connCount">—</span></button>
+      <button class="link-btn" id="perfBtn" title="查看各模板的渲染耗时">性能</button>
     </div>
   </aside>
 
@@ -105,6 +106,27 @@
       </div>
       <ul id="warnList"></ul>
     </aside>
+
+    <div class="modal-mask" id="perfMask" hidden>
+      <div class="modal">
+        <div class="warn-head">
+          <strong>渲染性能</strong>
+          <button class="icon-btn" id="perfClose" aria-label="关闭">×</button>
+        </div>
+        <p class="conn-hint" id="perfHint">—</p>
+        <div class="perf-table-wrap">
+          <table class="perf-table">
+            <thead>
+              <tr>
+                <th>模板</th><th>次数</th><th>平均</th><th>最慢</th>
+                <th>缓存命中</th><th>错误</th>
+              </tr>
+            </thead>
+            <tbody id="perfBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
 
     <div class="modal-mask" id="connMask" hidden>
       <div class="modal">

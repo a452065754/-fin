@@ -1254,3 +1254,49 @@ svg {
     border-color: #ccd3dd !important;
   }
 }
+
+/* ---------- 渲染性能面板 ---------- */
+
+.perf-table-wrap {
+  overflow: auto;
+}
+
+.perf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.perf-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-weight: 500;
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.perf-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-2);
+  white-space: nowrap;
+}
+
+.perf-path {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: Consolas, Monaco, monospace;
+  color: var(--ink-2);
+}
+
+.perf-row {
+  cursor: pointer;
+}
+
+.perf-row:hover td {
+  background: var(--bg);
+}

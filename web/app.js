@@ -51,7 +51,8 @@
       'warnBtn', 'warnCount', 'pageTabs', 'stage', 'emptyState', 'loading', 'previewRoot',
       'warnPanel', 'warnList', 'warnClose', 'toggleSidebar', 'app',
       'connBtn', 'connCount', 'connMask', 'connClose', 'connList', 'connHint',
-      'shareBtn', 'exportBtn', 'exportMenu'
+      'shareBtn', 'exportBtn', 'exportMenu',
+      'perfBtn', 'perfMask', 'perfClose', 'perfHint', 'perfBody'
     ].forEach(function (id) {
       els[id] = document.getElementById(id);
     });
@@ -85,6 +86,13 @@
     });
     els.connMask.addEventListener('click', function (e) {
       if (e.target === els.connMask) els.connMask.hidden = true;
+    });
+    els.perfBtn.addEventListener('click', showPerf);
+    els.perfClose.addEventListener('click', function () {
+      els.perfMask.hidden = true;
+    });
+    els.perfMask.addEventListener('click', function (e) {
+      if (e.target === els.perfMask) els.perfMask.hidden = true;
     });
 
     els.reloadBtn.addEventListener('click', applyParams);
@@ -179,6 +187,63 @@
 
   // Connections declared in WEB-INF/embed/finedb. Passwords live in the
   // environment, so the panel only reports which ones are ready to use.
+  // Shows the per-template rendering statistics so the slow reports can be
+  // spotted. The numbers come from the server, which times every render.
+  function showPerf() {
+    els.perfMask.hidden = false;
+    els.perfHint.textContent = '正在读取…';
+    els.perfBody.innerHTML = '';
+    fetch('/api/perf?limit=100')
+      .then(function (res) {
+        return res.json().then(function (data) {
+          if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          return data;
+        });
+      })
+      .then(function (data) {
+        var list = data.templates || [];
+        if (!list.length) {
+          els.perfHint.textContent = '还没有渲染记录。打开几个报表后再回来看看。';
+          return;
+        }
+        var totalMs = 0;
+        var totalCount = 0;
+        list.forEach(function (t) { totalMs += t.totalMs; totalCount += t.count; });
+        els.perfHint.textContent =
+          '共跟踪 ' + data.tracked + ' 个模板，累计渲染 ' + totalCount +
+          ' 次、耗时 ' + Math.round(totalMs) + ' 毫秒。按累计耗时排序，最慢的在前。';
+
+        list.forEach(function (t) {
+          var tr = document.createElement('tr');
+          var cells = [
+            { text: t.path, title: t.path, cls: 'perf-path' },
+            { text: String(t.count) },
+            { text: t.avgMs.toFixed(0) + ' ms' },
+            { text: t.maxMs + ' ms' },
+            { text: Math.round(t.hitRate * 100) + '%' },
+            { text: t.errors ? String(t.errors) : '' }
+          ];
+          cells.forEach(function (c) {
+            var td = document.createElement('td');
+            td.textContent = c.text;
+            if (c.title) td.title = c.title;
+            if (c.cls) td.className = c.cls;
+            tr.appendChild(td);
+          });
+          // Clicking a row opens that report.
+          tr.classList.add('perf-row');
+          tr.addEventListener('click', function () {
+            els.perfMask.hidden = true;
+            openTemplate(t.path);
+          });
+          els.perfBody.appendChild(tr);
+        });
+      })
+      .catch(function (err) {
+        els.perfHint.textContent = '读取失败：' + (err.message || err);
+      });
+  }
+
   function showConnections() {
     els.connMask.hidden = false;
     els.connList.innerHTML = '';
