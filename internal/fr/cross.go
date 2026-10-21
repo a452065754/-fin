@@ -25,6 +25,13 @@ type crossRenderer struct {
 	hVals []any // distinct values the band expands to
 
 	vCells []*CellTemplate // vertical band cells (Expand dir=0)
+	// vGroupCells are the vertical band cells that belong to the driving
+	// dataset (x.ds). They define the row grouping. A vertical ds cell whose
+	// dataset differs from x.ds (e.g. a lookup column bound to another
+	// dataset) is NOT a group key and must be resolved by joining on the
+	// shared column instead.
+	vGroupCells []*CellTemplate
+	vGroupIdx   map[*CellTemplate]int
 	vRows  map[int]bool    // template rows that carry a vertical band cell
 
 	groups []crossGroup
@@ -73,6 +80,7 @@ func (r *renderState) renderCross(sh *SheetTemplate) *Sheet {
 		r:         r,
 		sh:        sh,
 		vRows:     map[int]bool{},
+		vGroupIdx: map[*CellTemplate]int{},
 		rawByOut:  map[[2]int]any{},
 		crossMemo: map[[3]int]any{},
 		fMemo:     map[[2]int]any{},
@@ -129,6 +137,16 @@ func (x *crossRenderer) collect() {
 	if x.ds == nil || !x.ds.Loaded {
 		return
 	}
+	// Group-key columns are the vertical band cells bound to the driving
+	// dataset. A vertical ds cell bound to another dataset (a lookup such as
+	// a 销售总额 column) is NOT a group key and is resolved by joining on
+	// the shared column instead.
+	for _, ct := range x.vCells {
+		if strings.EqualFold(ct.DSName, x.ds.Name) {
+			x.vGroupIdx[ct] = len(x.vGroupCells)
+			x.vGroupCells = append(x.vGroupCells, ct)
+		}
+	}
 	// Horizontal values: distinct, first-seen order (FunctionGrouper).
 	if hi := x.ds.ColumnIndex(x.hCell.Column); hi >= 0 {
 		seen := map[string]bool{}
@@ -143,12 +161,14 @@ func (x *crossRenderer) collect() {
 			}
 		}
 	}
-	// Vertical groups: the tuple of the vertical band columns.
+	// Vertical groups: the tuple of the vertical group columns (those bound
+	// to the driving dataset). Foreign-dataset columns are not part of the
+	// group key.
 	groupIdx := map[string]int{}
 	for i, row := range x.ds.Rows {
 		var keys []any
 		var kb strings.Builder
-		for _, vc := range x.vCells {
+		for _, vc := range x.vGroupCells {
 			ci := x.ds.ColumnIndex(vc.Column)
 			var v any
 			if ci >= 0 && ci < len(row) {
@@ -263,13 +283,19 @@ func (x *crossRenderer) emitBody(outRow, gi int, rowCells []*CellTemplate) {
 	g := x.groups[gi]
 	for _, ct := range rowCells {
 		if ct.Kind == "ds" && ct.ExpandDir == 0 {
-			// Vertical band cell: the group key.
-			idx := x.vIndexOf(ct)
-			var raw any
-			if idx < len(g.keys) {
-				raw = g.keys[idx]
+			if x.ds != nil && strings.EqualFold(ct.DSName, x.ds.Name) {
+				// Vertical group key cell: show the group's key value.
+				idx := x.groupIndexOf(ct)
+				var raw any
+				if idx >= 0 && idx < len(g.keys) {
+					raw = g.keys[idx]
+				}
+				x.emitMapped(ct, outRow, raw)
+			} else {
+				// Foreign-dataset column (e.g. a lookup bound to another
+				// dataset): resolve by joining on the shared group column.
+				x.emitMapped(ct, outRow, x.foreignDSValue(ct, gi))
 			}
-			x.emitMapped(ct, outRow, raw)
 			continue
 		}
 		if ct.C == x.hCol && (ct.Kind == "ds" || ct.Kind == "formula") {
@@ -767,4 +793,55 @@ func (x *crossRenderer) vIndexOf(ct *CellTemplate) int {
 	i := len(x.vCellIdx)
 	x.vCellIdx[ct] = i
 	return i
+}
+
+// groupIndexOf returns the index of a group-key cell within vGroupCells.
+func (x *crossRenderer) groupIndexOf(ct *CellTemplate) int {
+	if i, ok := x.vGroupIdx[ct]; ok {
+		return i
+	}
+	return -1
+}
+
+// foreignDSValue resolves a vertical band cell that is bound to a dataset
+// other than the driving one. FineReport shows, for the current group, the
+// row of that foreign dataset whose shared column (e.g. 销售员) equals the
+// current group's key value. We join on the first group column whose name
+// also exists in the foreign dataset.
+func (x *crossRenderer) foreignDSValue(ct *CellTemplate, gi int) any {
+	fds := x.r.tpl.Datasets[ct.DSName]
+	if fds == nil || !fds.Loaded || len(fds.Rows) == 0 {
+		return nil
+	}
+	g := x.groups[gi]
+	joinVal := ""
+	joinCol := -1
+	for _, gc := range x.vGroupCells {
+		ci := fds.ColumnIndex(gc.Column)
+		if ci < 0 {
+			continue
+		}
+		idx := x.groupIndexOf(gc)
+		if idx < 0 || idx >= len(g.keys) {
+			continue
+		}
+		joinVal = stringOf(g.keys[idx])
+		joinCol = ci
+		break
+	}
+	if joinCol < 0 {
+		return nil
+	}
+	tc := fds.ColumnIndex(ct.Column)
+	if tc < 0 {
+		return nil
+	}
+	for _, row := range fds.Rows {
+		if joinCol < len(row) && stringOf(row[joinCol]) == joinVal {
+			if tc < len(row) {
+				return row[tc]
+			}
+		}
+	}
+	return nil
 }
