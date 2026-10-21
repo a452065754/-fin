@@ -317,7 +317,13 @@ func formatNumber(f float64, pattern string) string {
 		return plainValue(f)
 	}
 	prefix = stripQuotes(pattern[:start])
-	suffix = stripQuotes(pattern[end+1:]) + suffix
+	// With a percent marker the trailing "%" of the pattern IS the marker,
+	// not a literal suffix; keeping both produced strings like "19.04%%".
+	suffixLit := pattern[end+1:]
+	if pct {
+		suffixLit = strings.TrimSuffix(suffixLit, "%")
+	}
+	suffix = stripQuotes(suffixLit) + suffix
 	numPart := pattern[start : end+1]
 	if pct {
 		numPart = strings.TrimSuffix(numPart, "%")

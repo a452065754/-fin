@@ -63,6 +63,9 @@ type CellTemplate struct {
 	// RGSummary reports whether the cell's grouper is a SummaryGrouper
 	// (aggregate such as sum) rather than a plain value grouper.
 	RGSummary bool
+	// RGFunc keeps the summary function class (SumFunction, CountFunction,
+	// AverageFunction, MaxFunction, MinFunction) of a SummaryGrouper.
+	RGFunc string
 	Dict         *DictSpec
 	Style        Style
 	ChartXML     *XNode
@@ -356,6 +359,9 @@ func parseCell(c *XNode, styles []Style) *CellTemplate {
 		ct.RGMode = rg.AttrInt("divideMode", 0)
 		if strings.Contains(rg.Attr("class"), "SummaryGrouper") {
 			ct.RGSummary = true
+			if fn := rg.Child("FN"); fn != nil {
+				ct.RGFunc = fn.TextTrim()
+			}
 		}
 	}
 	if p := c.Child("Present"); p != nil {

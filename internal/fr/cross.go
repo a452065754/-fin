@@ -42,6 +42,18 @@ type crossRenderer struct {
 	vCellIdx  map[*CellTemplate]int
 
 	pending []crossPending
+
+	// pendingBand holds static-row formulas that follow the horizontal band
+	// (one output cell per band value, e.g. the 总计 row).
+	pendingBand []crossBandPending
+}
+
+type crossBandPending struct {
+	ct     *CellTemplate
+	outRow int
+	outCol int
+	j      int
+	idx    int
 }
 
 type crossGroup struct {
@@ -72,6 +84,7 @@ func (r *renderState) renderCross(sh *SheetTemplate) *Sheet {
 	x.expandSize()
 	x.emit()
 	x.resolvePending()
+	x.resolveBandPending()
 	out := &Sheet{Name: sh.Name, Cols: x.widths, Rows: x.rows, Cells: x.cells}
 	for _, w := range out.Cols {
 		out.Width += w
@@ -280,6 +293,17 @@ func (x *crossRenderer) emitBody(outRow, gi int, rowCells []*CellTemplate) {
 func (x *crossRenderer) emitStaticRow(outRow int, rowCells []*CellTemplate) {
 	for _, ct := range rowCells {
 		if ct.Kind == "formula" {
+			// A formula that references the band body cell expands with the
+			// band: one output cell per horizontal value, each summed over
+			// every vertical group (总计 row of a cross report).
+			if x.refsBand(ct.Formula) && len(x.hVals) > 0 {
+				for j := range x.hVals {
+					oc := OutCell{R: outRow, C: x.hCol + j, RS: ct.RS, CS: 1, Style: ct.Style, Widget: ct.Widget}
+					x.cells = append(x.cells, oc)
+					x.pendingBand = append(x.pendingBand, crossBandPending{ct: ct, outRow: outRow, outCol: x.hCol + j, j: j, idx: len(x.cells) - 1})
+				}
+				continue
+			}
 			oc := OutCell{R: outRow, C: x.mapCol(ct.C), RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
 			x.cells = append(x.cells, oc)
 			x.pending = append(x.pending, crossPending{ct: ct, outRow: outRow, outCol: x.mapCol(ct.C), idx: len(x.cells) - 1})
@@ -321,6 +345,126 @@ func (x *crossRenderer) resolvePending() {
 	}
 }
 
+// resolveBandPending evaluates the static-row formulas that expand with the
+// horizontal band. Each instance is computed with band references scoped to
+// one band column: =SUM(C4) under the 牛奶 column sums the 牛奶 values of all
+// vertical groups.
+func (x *crossRenderer) resolveBandPending() {
+	for _, p := range x.pendingBand {
+		ctx := NewEvalContext()
+		ctx.Params = x.r.paramVal
+		ctx.DatasetFields = x.r.datasetFields
+		ctx.DatasetColumnValues = x.r.datasetColumnValues
+		ctx.DatasetGroup = x.r.datasetGroup
+		ctx.ReportCell = x.r.reportCell
+		ctx.FormulaSQL = x.r.formulaSQL
+		ctx.Ref = func(ref string) (any, bool) {
+			col, row, ok := CellRefParts(ref)
+			if !ok {
+				return nil, false
+			}
+			if col == x.hCol && x.vRows[row] {
+				btc := x.sh.Cells[[2]int{row, x.hCol}]
+				if btc == nil {
+					return nil, false
+				}
+				var arr []any
+				for gi := range x.groups {
+					arr = append(arr, x.crossRaw(btc, gi, p.j))
+				}
+				return arr, true
+			}
+			return x.refRaw(row, col)
+		}
+		v, err := EvalFormula(p.ct.Formula, ctx)
+		if err != nil {
+			x.r.warn(fmt.Sprintf("公式 %s 计算失败: %v", strings.TrimSpace(p.ct.Formula), err))
+			v = "#ERROR"
+		}
+		x.cells[p.idx].Text = x.r.display(p.ct, v)
+		x.rawByOut[[2]int{p.outRow, p.outCol}] = v
+	}
+}
+
+// refsBand reports whether the formula references the band body cell, which
+// makes a static-row formula expand together with the band.
+func (x *crossRenderer) refsBand(formula string) bool {
+	runes := []rune(formula)
+	i := 0
+	for i < len(runes) {
+		c := runes[i]
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '$') {
+			i++
+			continue
+		}
+		start := i
+		for i < len(runes) && (runes[i] >= 'A' && runes[i] <= 'Z' || runes[i] >= 'a' && runes[i] <= 'z' || runes[i] == '$') {
+			i++
+		}
+		digitStart := i
+		for i < len(runes) && runes[i] >= '0' && runes[i] <= '9' {
+			i++
+		}
+		if i == digitStart {
+			continue // plain identifier such as SUM or IF, no row digits
+		}
+		if i < len(runes) && (runes[i] >= 'A' && runes[i] <= 'Z' || runes[i] >= 'a' && runes[i] <= 'z') {
+			continue // part of a longer token
+		}
+		if col, row, ok := CellRefParts(string(runes[start:i])); ok {
+			if col == x.hCol && x.vRows[row] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// aggregateFunc applies a SummaryGrouper function to a set of values.
+func aggregateFunc(fnClass string, vals []any) any {
+	var nums []float64
+	for _, v := range vals {
+		if f, ok := toFloat(v); ok {
+			nums = append(nums, f)
+		}
+	}
+	switch {
+	case strings.Contains(fnClass, "CountFunction"):
+		return float64(len(vals))
+	case len(nums) == 0:
+		// No matching rows: FineReport leaves the cell blank.
+		return nil
+	case strings.Contains(fnClass, "AverageFunction"):
+		sum := 0.0
+		for _, f := range nums {
+			sum += f
+		}
+		return sum / float64(len(nums))
+	case strings.Contains(fnClass, "MaxFunction"):
+		m := nums[0]
+		for _, f := range nums {
+			if f > m {
+				m = f
+			}
+		}
+		return m
+	case strings.Contains(fnClass, "MinFunction"):
+		m := nums[0]
+		for _, f := range nums {
+			if f < m {
+				m = f
+			}
+		}
+		return m
+	default: // SumFunction and unknown functions fall back to sum
+		sum := 0.0
+		for _, f := range nums {
+			sum += f
+		}
+		return sum
+	}
+}
+
 func (x *crossRenderer) emitMapped(ct *CellTemplate, outRow int, raw any) {
 	oc := OutCell{R: outRow, C: x.mapCol(ct.C), RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
 	if ct.Kind == "chart" {
@@ -352,6 +496,20 @@ func (x *crossRenderer) bodyRaw(ct *CellTemplate, gi int) any {
 	switch ct.Kind {
 	case "ds":
 		rows := x.groups[gi].rows
+		// SummaryGrouper cells (e.g. 销售总量 = SUM of the group) aggregate
+		// every dataset row of the group, not just the first one.
+		if ct.RGSummary && x.ds != nil && x.ds.Loaded {
+			ci := x.ds.ColumnIndex(ct.Column)
+			if ci >= 0 {
+				var vals []any
+				for _, r := range rows {
+					if ci < len(x.ds.Rows[r]) {
+						vals = append(vals, x.ds.Rows[r][ci])
+					}
+				}
+				return aggregateFunc(ct.RGFunc, vals)
+			}
+		}
 		if len(rows) > 0 {
 			return x.r.dsValue(ct, rows[0])
 		}
@@ -443,8 +601,7 @@ func (x *crossRenderer) crossRaw(ct *CellTemplate, gi, j int) any {
 		if ci >= 0 && hi >= 0 && ct.Column != x.hCell.Column {
 			want := stringOf(x.hVals[j])
 			if ct.RGSummary {
-				sum := 0.0
-				counted := false
+				var vals []any
 				for _, r := range x.groups[gi].rows {
 					row := x.ds.Rows[r]
 					if hi >= len(row) || ci >= len(row) {
@@ -453,16 +610,9 @@ func (x *crossRenderer) crossRaw(ct *CellTemplate, gi, j int) any {
 					if stringOf(row[hi]) != want {
 						continue
 					}
-					if f, ok := toFloat(row[ci]); ok {
-						sum += f
-						counted = true
-					}
+					vals = append(vals, row[ci])
 				}
-				if counted {
-					raw = sum
-				} else {
-					raw = 0.0
-				}
+				raw = aggregateFunc(ct.RGFunc, vals)
 			} else {
 				for _, r := range x.groups[gi].rows {
 					row := x.ds.Rows[r]
@@ -514,7 +664,12 @@ func (x *crossRenderer) sliceValues(cell, spec, condition string, gi int) (any, 
 			if condition != "" && !x.condHolds(condition, gi, j, hv) {
 				continue
 			}
-			out = append(out, x.crossRaw(tc, gi, j))
+			v := x.crossRaw(tc, gi, j)
+			if v == nil {
+				// Blank cross cells act as 0 inside formulas.
+				v = 0.0
+			}
+			out = append(out, v)
 		}
 		if len(out) == 1 {
 			return out[0], nil
@@ -560,11 +715,14 @@ func (x *crossRenderer) condHolds(cond string, gi, j int, hv any) bool {
 
 // refRaw looks up an already emitted output value by template coordinates.
 func (x *crossRenderer) refRaw(row, col int) (any, bool) {
-	or := x.mapRow(row)
-	if col == x.hCol && x.vRows[row] {
+	base := x.mapRow(row)
+	// A reference to a vertically expanding row returns the array of all
+	// its instances (FineReport semantics), so SUM(D4) totals the column.
+	if x.vRows[row] && col != x.hCol {
+		mc := x.mapCol(col)
 		var arr []any
-		for j := 0; j < len(x.hVals); j++ {
-			if v, ok := x.rawByOut[[2]int{or, x.hCol + j}]; ok {
+		for gi := range x.groups {
+			if v, ok := x.rawByOut[[2]int{base + gi, mc}]; ok {
 				arr = append(arr, v)
 			}
 		}
@@ -573,7 +731,21 @@ func (x *crossRenderer) refRaw(row, col int) (any, bool) {
 		}
 		return nil, false
 	}
-	if v, ok := x.rawByOut[[2]int{or, x.mapCol(col)}]; ok {
+	if col == x.hCol && x.vRows[row] {
+		var arr []any
+		for gi := range x.groups {
+			for j := 0; j < len(x.hVals); j++ {
+				if v, ok := x.rawByOut[[2]int{base + gi, x.hCol + j}]; ok {
+					arr = append(arr, v)
+				}
+			}
+		}
+		if len(arr) > 0 {
+			return arr, true
+		}
+		return nil, false
+	}
+	if v, ok := x.rawByOut[[2]int{base, x.mapCol(col)}]; ok {
 		return v, true
 	}
 	return nil, false

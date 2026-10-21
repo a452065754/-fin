@@ -148,7 +148,10 @@ type FVSPage struct {
 	Background      string   `json:"background,omitempty"`
 	BackgroundImage string   `json:"backgroundImage,omitempty"`
 	BackgroundSize  string   `json:"backgroundSize,omitempty"`
-	Widgets         []Widget `json:"widgets"`
+	// Theme is "dark" when the page uses the FineReport dark-blue palette so
+	// the frontend paints themed chart colors and axis labels.
+	Theme   string   `json:"theme,omitempty"`
+	Widgets []Widget `json:"widgets"`
 }
 
 type Widget struct {

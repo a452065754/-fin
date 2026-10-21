@@ -793,6 +793,11 @@ func (r *renderState) findVerticalBand(sh *SheetTemplate) *bandInfo {
 		}
 	}
 	for _, ct := range dsCells {
+		// A SummaryGrouper cell aggregates its parent groups; it is never a
+		// grouping column even when its raw values happen to repeat.
+		if ct.RGSummary {
+			break
+		}
 		if ct.HasRG && ct.RGMode != 0 {
 			break
 		}
@@ -978,8 +983,15 @@ func (v *vertRenderer) emitLevel(level int, rows []int) {
 	for _, part := range partitions {
 		start := len(v.rows)
 		if level+1 >= len(cols) {
-			for _, d := range part {
-				v.emitDetail(d)
+			if v.deepestSummaryMode() {
+				// Every detail cell carries a SummaryGrouper, so FineReport
+				// emits ONE row per parent group with the aggregated value
+				// instead of one row per dataset row.
+				v.emitSummaryDetail(part)
+			} else {
+				for _, d := range part {
+					v.emitDetail(d)
+				}
 			}
 		} else {
 			v.emitLevel(level+1, part)
@@ -1017,6 +1029,57 @@ func (v *vertRenderer) emitGroupCell(col int, rows []int, start, end int) {
 	v.cells = append(v.cells, oc)
 	if len(rows) > 0 {
 		v.rawByOut[[2]int{start, col}] = v.r.dsValue(ct, rows[0])
+	}
+}
+
+// deepestSummaryMode reports whether every band dataset detail cell carries a
+// SummaryGrouper. In that case FineReport collapses the deepest group level to
+// one row per group with the aggregated value.
+func (v *vertRenderer) deepestSummaryMode() bool {
+	found := false
+	for _, ct := range v.band.cells {
+		if ct.Kind != "ds" || v.isGroupCol(ct.C) {
+			continue
+		}
+		if v.band.ds == nil || !strings.EqualFold(ct.DSName, v.band.ds.Name) {
+			continue
+		}
+		if !ct.RGSummary {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+// emitSummaryDetail paints one output row for a deepest-level group, applying
+// the SummaryGrouper function to every detail cell over the group's rows.
+func (v *vertRenderer) emitSummaryDetail(part []int) {
+	d := part[0]
+	outRow := len(v.rows)
+	v.rows = append(v.rows, v.sh.RowHeights[v.band.row])
+	for _, ct := range v.band.cells {
+		if v.isGroupCol(ct.C) {
+			continue
+		}
+		var raw any
+		if ct.Kind == "ds" && v.band.ds != nil && strings.EqualFold(ct.DSName, v.band.ds.Name) && ct.RGSummary {
+			vals := make([]any, 0, len(part))
+			for _, r := range part {
+				vals = append(vals, v.r.dsValue(ct, r))
+			}
+			raw = aggregateFunc(ct.RGFunc, vals)
+		} else {
+			raw = v.bandCellRaw(ct, d)
+		}
+		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
+		if ct.Kind == "chart" {
+			oc.Chart = v.r.chartFor(ct)
+		} else {
+			oc.Text = v.r.display(ct, raw)
+		}
+		v.cells = append(v.cells, oc)
+		v.rawByOut[[2]int{outRow, ct.C}] = raw
 	}
 }
 

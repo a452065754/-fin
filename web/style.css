@@ -942,10 +942,12 @@ svg {
   position: relative;
   overflow: hidden;
   background: #0b1220;
+  color: #e8eef7;
 }
 
 .fvs-page.is-light {
   background: #fff;
+  color: #1f2937;
 }
 
 .fvs-widget {
@@ -988,7 +990,8 @@ svg {
   width: 100%;
   height: 100%;
   overflow: auto;
-  background: #fff;
+  /* FVS report blocks sit transparently on the dashboard background, unlike
+     the white paper of a CPT page. */
   scrollbar-width: thin;
 }
 
@@ -1012,6 +1015,8 @@ svg {
   top: 0;
   left: 0;
   transform-origin: top left;
+  /* Report blocks sit on the dashboard background like in FineReport. */
+  background: transparent;
 }
 
 .fvs-tabbar {

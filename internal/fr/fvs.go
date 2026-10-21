@@ -35,6 +35,7 @@ type FVSTemplate struct {
 type FVSStory struct {
 	Name       string
 	Background map[string]any
+	Border     map[string]any
 	Hidden     bool
 	Widgets    []*FVSWidget
 }
@@ -70,6 +71,7 @@ type fvsStore struct {
 type fvsStoryRaw struct {
 	Name            string          `json:"name"`
 	Background      json.RawMessage `json:"background"`
+	Border          json.RawMessage `json:"border"`
 	IsPreviewHidden bool            `json:"isPreviewHidden"`
 	Widgets         []fvsWidgetRaw  `json:"widgets"`
 }
@@ -202,6 +204,9 @@ func ParseFVSFile(path string) (*FVSTemplate, error) {
 		if len(sr.Background) > 0 {
 			_ = json.Unmarshal(sr.Background, &story.Background)
 		}
+		if len(sr.Border) > 0 {
+			_ = json.Unmarshal(sr.Border, &story.Border)
+		}
 		for j := range sr.Widgets {
 			rw := &sr.Widgets[j]
 			w := &FVSWidget{
@@ -331,39 +336,92 @@ func (t *FVSTemplate) Render(dr *DataResolver, params map[string]string) *Previe
 }
 
 func (t *FVSTemplate) applyStoryBackground(page *FVSPage, story *FVSStory) {
-	bg := story.Background
-	if len(bg) == 0 {
-		return
-	}
-	typ := fvsStr(bg, "type")
-	switch typ {
-	case "color":
-		page.Background = fvsStr(bg, "value")
-	case "custom", "image":
-		v := fvsMap(bg, "value")
-		id := fvsStr(v, "id")
-		if id == "" && len(v) == 0 {
-			id = fvsStr(bg, "value")
+	// The story background paints under everything. Real dashboards either
+	// set a color/image background or rely on the "internal" border texture
+	// (a nine-slice JPG that carries the signature dark-blue look).
+	if bg := story.Background; len(bg) > 0 {
+		typ := fvsStr(bg, "type")
+		switch typ {
+		case "color":
+			page.Background = fvsStr(bg, "value")
+		case "custom", "image":
+			t.applyImageBackground(page, fvsMap(bg, "value"), fvsStr(bg, "value"))
 		}
-		if id == "" {
-			if rid, ok := t.byResName[fvsStr(v, "imageSource")]; ok {
-				id = rid
+	}
+	if page.Background == "" && page.BackgroundImage == "" {
+		if b := story.Border; len(b) > 0 {
+			switch fvsStr(b, "type") {
+			case "internal":
+				// The nine-slice frame texture stretches well enough as a
+				// full-bleed background for preview purposes.
+				t.applyImageBackground(page, fvsMap(b, "value"), fvsStr(b, "value"))
+			case "color":
+				page.Background = fvsStr(b, "value")
 			}
 		}
-		if id != "" {
-			page.BackgroundImage = t.assetURL(id)
-		}
-		switch fvsStr(v, "backgroundFillType") {
-		case "stretch":
-			page.BackgroundSize = "100% 100%"
-		case "repeat", "tile":
-			page.BackgroundSize = "auto"
-		case "cover":
-			page.BackgroundSize = "cover"
-		default:
-			page.BackgroundSize = "100% 100%"
+	}
+	if page.Background != "" {
+		page.Theme = themeForColor(page.Background)
+		return
+	}
+	if page.BackgroundImage != "" {
+		page.Theme = "dark"
+		return
+	}
+	// backgroundFillType "auto" (the designer default) renders the classic
+	// FineReport dark-blue gradient; without it every light-on-dark widget
+	// becomes white text on a white page.
+	page.Background = "linear-gradient(160deg, #233F66 0%, #001223 55%, #000E1A 100%)"
+	page.Theme = "dark"
+}
+
+func (t *FVSTemplate) applyImageBackground(page *FVSPage, v map[string]any, fallbackID string) {
+	id := fvsStr(v, "id")
+	if id == "" && len(v) == 0 {
+		id = fallbackID
+	}
+	if id == "" {
+		if rid, ok := t.byResName[fvsStr(v, "imageSource")]; ok {
+			id = rid
 		}
 	}
+	if id != "" {
+		page.BackgroundImage = t.assetURL(id)
+	}
+	switch fvsStr(v, "backgroundFillType") {
+	case "stretch":
+		page.BackgroundSize = "100% 100%"
+	case "repeat", "tile":
+		page.BackgroundSize = "auto"
+	case "cover":
+		page.BackgroundSize = "cover"
+	default:
+		page.BackgroundSize = "100% 100%"
+	}
+}
+
+// themeForColor marks a page dark when its solid background color is dark
+// enough that light chart labels are required for contrast.
+func themeForColor(color string) string {
+	c := strings.TrimPrefix(strings.TrimSpace(color), "#")
+	if len(c) == 8 {
+		c = c[2:] // drop alpha
+	}
+	if len(c) != 6 {
+		return ""
+	}
+	num, err := strconv.ParseUint(c, 16, 32)
+	if err != nil {
+		return ""
+	}
+	r := float64((num>>16)&0xff) / 255
+	g := float64((num>>8)&0xff) / 255
+	b := float64(num&0xff) / 255
+	lum := 0.2126*r + 0.7152*g + 0.0722*b
+	if lum < 0.45 {
+		return "dark"
+	}
+	return ""
 }
 
 func (t *FVSTemplate) assetURL(resourceID string) string {
@@ -737,11 +795,47 @@ func fvsMap(m map[string]any, key string) map[string]any {
 	return nil
 }
 
+// fvsColor converts a color property to a CSS color string. The property is
+// normally a plain "#RRGGBB" string, but gradient titles carry an object such
+// as {"colors":[{"value":"#F5A623FF","position":"0"},...],"angle":0}; printing
+// that directly would leak Go map syntax into the dashboard, so we fall back
+// to the first gradient stop.
+func fvsColor(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case map[string]any:
+		if stops, ok := t["colors"].([]any); ok {
+			for _, sv := range stops {
+				if s, ok := sv.(map[string]any); ok {
+					if c := fvsStr(s, "value"); c != "" {
+						return c
+					}
+				}
+			}
+		}
+		if c := fvsStr(t, "value"); c != "" {
+			return c
+		}
+	}
+	return ""
+}
+
 func fvsTitleText(st *renderState, props map[string]any) (string, string, TextStyle) {
-	text := st.substitute(fvsStr(props, "values"))
+	// Titles keep their content under "value" (older builds used "values").
+	// The value may be plain text or a formula such as =$area+"标题".
+	text := fvsStr(props, "value")
+	if text == "" {
+		text = fvsStr(props, "values")
+	}
+	if strings.HasPrefix(text, "=") {
+		text = stringOf(st.evalStandalone(text))
+	} else {
+		text = st.substitute(text)
+	}
 	var ts TextStyle
 	ts.FontFamily = strings.Trim(fvsStr(props, "fontFamily"), `"'`)
-	ts.Color = fvsStr(props, "color")
+	ts.Color = fvsColor(props["color"])
 	ts.Align = fvsStr(props, "textAlign")
 	ts.LetterSpacing = fvsNum(props["letterSpacing"], 0)
 	if style := fvsMap(props, "style"); len(style) > 0 {
@@ -808,6 +902,11 @@ func fvsRichText(st *renderState, props map[string]any) (string, string, TextSty
 			ts.Color = fvsStr(attrs, "color")
 			ts.LineHeight = fvsStr(attrs, "lineHeight")
 			first = false
+		} else if fvsStr(attrs, "color") != ts.Color {
+			// Runs disagree on color, so the widget-level color would paint
+			// uncolored runs with the first run's color. Leave the widget
+			// color unset and keep every run styled individually.
+			ts.Color = ""
 		}
 		if f := strings.Trim(fvsStr(attrs, "font"), `"'`); f != "" {
 			css = append(css, "font-family:"+safeCSS(f))
@@ -868,7 +967,7 @@ func fvsRunText(st *renderState, run map[string]any) string {
 func fvsTimeText(props map[string]any) (string, TextStyle) {
 	var ts TextStyle
 	ts.FontFamily = strings.Trim(fvsStr(props, "fontFamily"), `"'`)
-	ts.Color = fvsStr(props, "color")
+	ts.Color = fvsColor(props["color"])
 	ts.Align = fvsStr(props, "textAlign")
 	ts.LetterSpacing = fvsNum(props["letterSpacing"], 0)
 	if style := fvsMap(props, "style"); len(style) > 0 {

@@ -2,6 +2,8 @@
   'use strict';
 
   var PALETTE = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc', '#48b8d0'];
+  // FineReport "暮霭深蓝" dashboard palette used by the FVS dark theme.
+  var DARK_PALETTE = ['#1898F8', '#00D8F8', '#1CA7FF', '#5EA9FF', '#7BDDFF', '#2E7CF6', '#00EAD8', '#F5A623'];
   var FONT_STACK = '"PingFang SC","Microsoft YaHei","Segoe UI",Arial,sans-serif';
 
   var state = {
@@ -16,6 +18,10 @@
     scale: 1,
     pageW: 0,
     pageH: 0,
+    fvsDark: false,
+    chinaGeo: null,
+    chinaCenters: {},
+    chinaGeoState: 'none',
     params: {},
     charts: [],
     reqToken: 0,
@@ -25,6 +31,61 @@
   var els = {};
   var toastTimer = null;
   var resizeTimer = null;
+
+  // FineReport area maps aggregate provinces into classical regions while the
+  // bundled GeoJSON carries full province names, so region-level categories
+  // are expanded through this table before they reach the map series.
+  var CHINA_REGIONS = {
+    '华东': ['上海市', '江苏省', '浙江省', '安徽省', '福建省', '江西省', '山东省', '台湾省'],
+    '华北': ['北京市', '天津市', '河北省', '山西省', '内蒙古自治区'],
+    '华南': ['广东省', '广西壮族自治区', '海南省', '香港特别行政区', '澳门特别行政区'],
+    '华中': ['河南省', '湖北省', '湖南省'],
+    '西南': ['重庆市', '四川省', '贵州省', '云南省', '西藏自治区'],
+    '西北': ['陕西省', '甘肃省', '青海省', '宁夏回族自治区', '新疆维吾尔自治区'],
+    '东北': ['辽宁省', '吉林省', '黑龙江省']
+  };
+
+  // Loads (once) the offline China GeoJSON shipped with the viewer and
+  // registers it with ECharts so area maps render real geometry.
+  function ensureChinaGeo() {
+    if (state.chinaGeo) return Promise.resolve(true);
+    if (state.chinaGeoState === 'loading') return Promise.resolve(false);
+    state.chinaGeoState = 'loading';
+    return fetch('/vendor/china.json').then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (gj) {
+      if (!gj || !gj.features) {
+        state.chinaGeoState = 'failed';
+        return false;
+      }
+      state.chinaGeo = gj;
+      state.chinaGeoState = 'ready';
+      gj.features.forEach(function (f) {
+        if (f.properties && f.properties.name && f.properties.center) {
+          state.chinaCenters[f.properties.name] = f.properties.center;
+        }
+      });
+      if (window.echarts && echarts.registerMap) {
+        echarts.registerMap('china', gj);
+      }
+      return true;
+    }).catch(function () {
+      state.chinaGeoState = 'failed';
+      return false;
+    });
+  }
+
+  // Resolves a map category such as 山东 or 山东省 to the feature name used
+  // by the bundled GeoJSON.
+  function chinaProvinceName(name) {
+    if (!name) return null;
+    var candidates = [name, name + '省', name + '市',
+      name + '壮族自治区', name + '回族自治区', name + '自治区', name + '特别行政区'];
+    for (var i = 0; i < candidates.length; i++) {
+      if (state.chinaCenters[candidates[i]]) return candidates[i];
+    }
+    return null;
+  }
 
   init();
 
@@ -740,6 +801,7 @@
   }
 
   function renderCPT(data) {
+    state.fvsDark = false;
     var sheet = (data.sheets || [])[state.page];
     if (!sheet) {
       toast('该报表没有可显示的页面');
@@ -814,13 +876,14 @@
     var height = page.height || 1080;
     state.pageW = width;
     state.pageH = height;
-
+    state.fvsDark = page.theme === 'dark';
     var wrap = document.createElement('div');
     wrap.className = 'doc-wrap';
     var box = document.createElement('div');
     box.className = 'page-box';
     var scaleEl = document.createElement('div');
     scaleEl.className = 'page-scale fvs-page';
+    if (!state.fvsDark) scaleEl.classList.add('is-light');
     scaleEl.style.width = width + 'px';
     scaleEl.style.height = height + 'px';
     scaleEl.style.background = page.background || '#ffffff';
@@ -1180,24 +1243,34 @@
   function initCharts(root) {
     if (!window.echarts) return;
     Array.prototype.forEach.call(root.querySelectorAll('.chart-box'), function (el) {
-      if (el.__chart || !el._spec) return;
-      if (!el.getClientRects().length) return;
-      if (el.clientWidth < 6 || el.clientHeight < 6) return;
+      initChartEl(el, root);
+    });
+  }
+
+  function initChartEl(el, root) {
+    if (el.__chart || !el._spec) return;
+    if (!el.getClientRects().length) return;
+    if (el.clientWidth < 6 || el.clientHeight < 6) return;
+    try {
       var option = chartOption(el._spec);
       if (!option) {
+        // Area maps need the China GeoJSON; retry once it has loaded instead
+        // of giving up with "图表无数据".
+        if (el._spec.kind === 'map' && state.chinaGeoState !== 'failed') {
+          ensureChinaGeo().then(function () { initChartEl(el, root); });
+          return;
+        }
         el.classList.add('chart-empty');
         el.textContent = '图表无数据';
         return;
       }
-      try {
-        var inst = window.echarts.init(el, null, { renderer: 'canvas' });
-        inst.setOption(option, true);
-        el.__chart = inst;
-        state.charts.push(inst);
-      } catch (err) {
-        if (window.console) console.warn('chart init failed', err);
-      }
-    });
+      var inst = window.echarts.init(el, null, { renderer: 'canvas' });
+      inst.setOption(option, true);
+      el.__chart = inst;
+      state.charts.push(inst);
+    } catch (err) {
+      if (window.console) console.warn('chart init failed', err);
+    }
   }
 
   function disposeCharts() {
@@ -1215,7 +1288,9 @@
 
   function chartOption(spec) {
     var kind = spec.kind || 'bar';
-    var colors = spec.colors && spec.colors.length ? spec.colors : PALETTE;
+    var dark = state.fvsDark;
+    var palette = dark ? DARK_PALETTE : PALETTE;
+    var colors = spec.colors && spec.colors.length ? spec.colors : palette;
     var series = spec.series || [];
     var cats = spec.categories || [];
     var hasTitle = !!(spec.title && String(spec.title).trim());
@@ -1226,7 +1301,7 @@
     var base = {
       color: colors,
       animationDuration: 380,
-      textStyle: { fontFamily: FONT_STACK, color: '#374151' },
+      textStyle: { fontFamily: FONT_STACK, color: dark ? '#d5e2f3' : '#374151' },
       title: {
         show: hasTitle,
         text: spec.title || '',
@@ -1235,7 +1310,7 @@
         textStyle: {
           fontSize: titleSize,
           fontWeight: 600,
-          color: spec.titleColor || '#1f2937',
+          color: spec.titleColor || (dark ? '#ffffff' : '#1f2937'),
           fontFamily: FONT_STACK
         }
       }
@@ -1246,7 +1321,7 @@
       itemWidth: 10,
       itemHeight: 8,
       itemGap: 9,
-      textStyle: { fontSize: 11, color: '#4b5563', fontFamily: FONT_STACK }
+      textStyle: { fontSize: 11, color: dark ? '#c9d6e8' : '#4b5563', fontFamily: FONT_STACK }
     };
     if (showLegend) {
       if (legendPos === 'bottom') {
@@ -1283,8 +1358,8 @@
             center: ['50%', '54%'],
             minAngle: 2,
             avoidLabelOverlap: true,
-            itemStyle: { borderColor: '#fff', borderWidth: 1 },
-            label: { fontSize: 10, color: '#475467', formatter: '{b}\n{d}%' },
+            itemStyle: { borderColor: dark ? '#0b1e33' : '#fff', borderWidth: 1 },
+            label: { fontSize: 10, color: dark ? '#d5e2f3' : '#475467', formatter: '{b}\n{d}%' },
             labelLine: { length: 8, length2: 6 },
             data: slices
           }]
@@ -1618,10 +1693,137 @@
       });
     }
 
-    if (kind === 'map') {
-      // Country/region geometry needs an offline map dataset that is not
-      // bundled. Keep the data visible as a ranked bar list instead of an
-      // empty frame, so the numbers are still readable.
+    var horizontal = kind === 'bar' || kind === 'gantt' ? !!spec.horizontal : false;
+    var catAxis = {
+      type: 'category',
+      data: cats,
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: dark ? '#3d5a7d' : '#d8dee8' } },
+      axisLabel: {
+        fontSize: 10,
+        color: dark ? '#c9d6e8' : '#4b5563',
+        hideOverlap: true,
+        interval: 'auto',
+        fontFamily: FONT_STACK
+      }
+    };
+    var valAxis = {
+      type: 'value',
+      axisTick: { show: false },
+      axisLine: { show: false },
+      axisLabel: { fontSize: 10, color: dark ? '#a9bcd6' : '#6b7280', fontFamily: FONT_STACK },
+      splitLine: { lineStyle: { color: dark ? 'rgba(255,255,255,0.14)' : '#eef1f5' } }
+    };
+
+    if (kind === 'map' && state.chinaGeo) {
+      // Real geometry: aggregate categories to provinces (region entries are
+      // expanded through CHINA_REGIONS) and shade them by value like
+      // FineReport's area map.
+      var entries = [];
+      cats.forEach(function (c, i) {
+        var v = 0;
+        series.forEach(function (s) { v += Number((s.data || [])[i]) || 0; });
+        if (c) entries.push({ name: c, value: v });
+      });
+      var mapData = [];
+      var seen = {};
+      var minV = Infinity;
+      var maxV = -Infinity;
+      entries.forEach(function (e) {
+        var provs = CHINA_REGIONS[e.name];
+        if (provs) {
+          // Label the member province nearest to the region's average center.
+          var sx = 0, sy = 0, n = 0;
+          provs.forEach(function (p) {
+            var c = state.chinaCenters[p];
+            if (c) { sx += c[0]; sy += c[1]; n++; }
+          });
+          var ax = n ? sx / n : 0, ay = n ? sy / n : 0;
+          var best = null, bd = Infinity;
+          provs.forEach(function (p) {
+            var c = state.chinaCenters[p];
+            if (!c) return;
+            var d = (c[0] - ax) * (c[0] - ax) + (c[1] - ay) * (c[1] - ay);
+            if (d < bd) { bd = d; best = p; }
+          });
+          provs.forEach(function (p) {
+            if (seen[p]) return;
+            seen[p] = 1;
+            var item = { name: p, value: e.value };
+            if (p === best) {
+              item.label = {
+                show: true,
+                formatter: e.name + '\n' + formatNumber(e.value),
+                color: '#ffffff',
+                fontSize: 13,
+                fontWeight: 'bold',
+                textBorderColor: 'rgba(0,24,48,0.65)',
+                textBorderWidth: 2
+              };
+            }
+            mapData.push(item);
+          });
+        } else {
+          var full = chinaProvinceName(e.name);
+          if (full && !seen[full]) {
+            seen[full] = 1;
+            mapData.push({ name: full, value: e.value });
+          }
+        }
+        if (e.value < minV) minV = e.value;
+        if (e.value > maxV) maxV = e.value;
+      });
+      if (!mapData.length) return null;
+      if (!isFinite(minV)) { minV = 0; maxV = 1; }
+      if (maxV <= minV) maxV = minV + 1;
+      var mapAreaNote = spec.mapArea ? spec.mapArea + (spec.drillDown ? '（钻取）' : '') : '';
+      return shallow(base, {
+        tooltip: {
+          trigger: 'item',
+          textStyle: { fontSize: 11, fontFamily: FONT_STACK },
+          formatter: function (p) {
+            return (p.name || '') + '：' + formatNumber(p.value);
+          }
+        },
+        legend: { show: false },
+        title: hasTitle
+          ? base.title
+          : { show: !!mapAreaNote, text: mapAreaNote, left: 'center', top: 4, textStyle: { fontSize: 12, color: dark ? '#a9bcd6' : '#6b7280', fontFamily: FONT_STACK } },
+        visualMap: {
+          show: false,
+          min: minV,
+          max: maxV,
+          inRange: { color: dark ? ['#1CA7FF', '#0059B3'] : ['#BBD8F7', '#1B62C4'] }
+        },
+        series: [{
+          type: 'map',
+          map: 'china',
+          roam: false,
+          layoutCenter: ['50%', '52%'],
+          layoutSize: '92%',
+          aspectScale: 0.82,
+          label: { show: false },
+          itemStyle: {
+            areaColor: dark ? 'rgba(96,156,225,0.10)' : '#eef2f8',
+            borderColor: dark ? 'rgba(130,185,245,0.5)' : '#ffffff',
+            borderWidth: 0.6
+          },
+          emphasis: {
+            label: { show: true, color: '#ffffff' },
+            itemStyle: { areaColor: '#2E7CF6' }
+          },
+          data: mapData
+        }]
+      });
+    }
+
+    if (kind === 'map' && !state.chinaGeo) {
+      // The offline GeoJSON is still loading (or failed to load); keep the
+      // data visible as a ranked bar list instead of an empty frame.
+      if (state.chinaGeoState !== 'failed') {
+        // Signal "not ready" so initChartEl retries once the map data is in.
+        return null;
+      }
       var ranked = [];
       cats.forEach(function (c, i) {
         var v = 0;
@@ -1649,28 +1851,6 @@
         }]
       });
     }
-
-    var horizontal = kind === 'bar' || kind === 'gantt' ? !!spec.horizontal : false;
-    var catAxis = {
-      type: 'category',
-      data: cats,
-      axisTick: { show: false },
-      axisLine: { lineStyle: { color: '#d8dee8' } },
-      axisLabel: {
-        fontSize: 10,
-        color: '#4b5563',
-        hideOverlap: true,
-        interval: 'auto',
-        fontFamily: FONT_STACK
-      }
-    };
-    var valAxis = {
-      type: 'value',
-      axisTick: { show: false },
-      axisLine: { show: false },
-      axisLabel: { fontSize: 10, color: '#6b7280', fontFamily: FONT_STACK },
-      splitLine: { lineStyle: { color: '#eef1f5' } }
-    };
 
     if (kind === 'box') {
       // A box plot series carries the five-number summary of every category
