@@ -29,20 +29,20 @@ webroot 渲染成 HTML 预览。内网无外网环境可直接部署。
 
 ## 硬指标
 
-<!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- AUTO:STATUS:BEGIN -->
+<!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- <!-- AUTO:STATUS:BEGIN -->
 
 <!-- 本区块由 tools/gen_status.py 生成，请勿手改。改完跑一次即可。 -->
 
 | 指标 | 值 | 怎么测的 |
 |---|---|---|
-| 测试用例 | 102 例 | `go test ./...` |
+| 测试用例 | 115 例 | `go test ./...` |
 | 图表类型 | 18 种 | `internal/fr/chart.go` 的 `spec.Kind` 枚举 |
 | HTTP 接口 | 7 个 | `internal/server/server.go` 的路由表 |
-| Go 代码 | 12511 行 | `wc -l` |
+| Go 代码 | 13711 行 | `wc -l` |
 | 前端代码 | 3611 行 | `wc -l` |
 | 可配置环境变量 | 5 个 | `FR_TEST_WEBROOT`、`FR_WEBROOT`、`RV_AUDIT_LOG`、`RV_PASSWORD`、`RV_USER` |
 
-<!-- AUTO:STATUS:END --> --> --> --> --> --> --> --> --> -->
+<!-- AUTO:STATUS:END --> --> --> --> --> --> --> --> --> --> -->
 
 以下几项依赖运行环境，手工维护：
 

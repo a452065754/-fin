@@ -26,6 +26,9 @@ type renderState struct {
 	renderedSheets []Sheet
 	// hasForm reports whether any rendered cell carried a fill-in control.
 	hasForm bool
+	// curVert is the vertical renderer that is currently producing cells.
+	// Cell slices need it to reach the expanded rows.
+	curVert *vertRenderer
 	// sheetIndex is the index of the sheet currently being rendered.
 	sheetIndex int
 }
@@ -294,6 +297,11 @@ func (r *renderState) dsValue(ct *CellTemplate, row int) any {
 
 func (r *renderState) evalFormula(ct *CellTemplate, ref func(string) (any, bool), rng func(string, string) (any, bool), seq int) any {
 	ctx := NewEvalContext()
+	// The sequence is one-based, so the current dataset row is one less.
+	ctx.CurRow = seq - 1
+	if ctx.CurRow < 0 {
+		ctx.CurRow = 0
+	}
 	ctx.Params = r.paramVal
 	ctx.Ref = ref
 	ctx.Range = rng
@@ -303,6 +311,9 @@ func (r *renderState) evalFormula(ct *CellTemplate, ref func(string) (any, bool)
 	ctx.DatasetFields = r.datasetFields
 	ctx.DatasetColumnValues = r.datasetColumnValues
 	ctx.DatasetGroup = r.datasetGroup
+	ctx.Slice = r.sliceValue
+	ctx.FormulaSQL = r.formulaSQL
+	ctx.LevelOf = r.levelOf
 	v, err := EvalFormula(ct.Formula, ctx)
 	if err != nil {
 		r.warn(fmt.Sprintf("公式 %s 计算失败: %v", strings.TrimSpace(ct.Formula), err))
@@ -314,7 +325,13 @@ func (r *renderState) evalFormula(ct *CellTemplate, ref func(string) (any, bool)
 // reportCell resolves FineReport's cross-report reference
 // VALUE("report name", row, column). The referenced report is looked up by
 // its file name under the reportlets tree and rendered on demand.
+//
+// The capability is closed unless the policy allows it, because it lets a
+// template read data from reports the person opening it did not pick.
 func (r *renderState) reportCell(name string, row, col int) (any, bool) {
+	if !r.policy().CrossReport {
+		return nil, false
+	}
 	if r.dr == nil || r.dr.Webroot == "" {
 		return nil, false
 	}
@@ -439,9 +456,77 @@ func (r *renderState) datasetGroup(dataset string, key any) (any, bool) {
 	return key, true
 }
 
+// sliceValue evaluates a cell slice such as C4[!0;!0]A{cond}. It needs the
+// vertical renderer, because the region it names is the expanded rows.
+//
+// curRow is the dataset row the formula sits on, which is the base of the
+// hierarchical offsets.
+func (r *renderState) sliceValue(cell, spec, condition string, curRow int) (any, error) {
+	if r.curVert == nil {
+		return nil, fmt.Errorf("该报表没有纵向扩展区，无法解析切片 %s[%s]A", cell, spec)
+	}
+	return r.curVert.sliceValues(cell, spec, condition, curRow)
+}
+
+// levelOf resolves FineReport's hierarchical reference "&A3".
+//
+// The "&" marks a hierarchical coordinate: it yields the number of the
+// level the cell sits on, counting from one along the expansion. That is
+// how a template detects the first row ("if(&A3 = 1, 0, ...)").
+func (r *renderState) levelOf(ref string) (any, bool) {
+	_, row, ok := CellRefParts(ref)
+	if !ok {
+		return nil, false
+	}
+	if r.curVert == nil || r.curVert.band == nil {
+		return nil, false
+	}
+	// A cell on the expansion row reports the current level.
+	if row == r.curVert.band.row {
+		return float64(r.curVert.curLevel + 1), true
+	}
+	return nil, false
+}
+
+// formulaSQL runs a query for the SQL() formula function. The capability is
+// closed unless the policy allows it, and the row cap comes from the policy
+// as well.
+func (r *renderState) formulaSQL(conn, query string, row, col int) (any, error) {
+	if r.dr == nil {
+		return nil, fmt.Errorf("没有可用的数据连接")
+	}
+	if !r.dr.Policy.FormulaSQL {
+		return nil, &PolicyError{Feature: "SQL() 公式函数", Switch: "RV_ALLOW_FORMULA_SQL=1"}
+	}
+	cols, rows, err := r.dr.QueryLimited(conn, query, r.dr.Policy.SQLRowLimit())
+	if err != nil {
+		return nil, err
+	}
+	if row < 1 || row > len(rows) {
+		return nil, fmt.Errorf("SQL 结果没有第 %d 行", row)
+	}
+	line := rows[row-1]
+	if col < 1 || col > len(line) {
+		return nil, fmt.Errorf("SQL 结果没有第 %d 列", col)
+	}
+	_ = cols
+	return line[col-1], nil
+}
+
+// policy returns the security policy of the current data resolver.
+func (r *renderState) policy() Policy {
+	if r.dr == nil {
+		return DefaultPolicy()
+	}
+	return r.dr.Policy
+}
+
 // sheetCell resolves a cross-sheet reference such as '2010-实际'!N5 by
 // looking the cell up in the already rendered sheets.
 func (r *renderState) sheetCell(sheet, ref string) (any, bool) {
+	if !r.policy().CrossSheet {
+		return nil, false
+	}
 	col, row, ok := CellRefParts(ref)
 	if !ok {
 		return nil, false
@@ -595,6 +680,8 @@ func (r *renderState) renderVertical(sh *SheetTemplate) *Sheet {
 		return r.renderStatic(sh)
 	}
 	bi := &vertRenderer{r: r, sh: sh, band: band, rawByOut: map[[2]int]any{}, bandMemo: map[[2]int]any{}, bandBusy: map[[2]int]bool{}}
+	// Cell slices need the renderer to reach the expanded rows.
+	r.curVert = bi
 	return bi.render()
 }
 
@@ -741,6 +828,9 @@ type vertRenderer struct {
 	rawByOut map[[2]int]any
 	bandMemo map[[2]int]any
 	bandBusy map[[2]int]bool
+	// curLevel is the dataset row currently being computed. It is the
+	// level a hierarchical reference such as "&A3" reports.
+	curLevel int
 }
 
 func (v *vertRenderer) render() *Sheet {
@@ -911,6 +1001,11 @@ func (v *vertRenderer) bandCellRaw(ct *CellTemplate, d int) any {
 	}
 	v.bandBusy[key] = true
 	defer delete(v.bandBusy, key)
+	// Remember which level is being computed, so a hierarchical reference
+	// such as "&A3" reports the right number.
+	prevLevel := v.curLevel
+	v.curLevel = d
+	defer func() { v.curLevel = prevLevel }()
 	var raw any
 	switch ct.Kind {
 	case "ds":

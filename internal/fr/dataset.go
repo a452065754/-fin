@@ -47,6 +47,10 @@ type Dataset struct {
 type DataResolver struct {
 	Webroot string
 
+	// Policy decides which restricted capabilities are available. The zero
+	// value keeps them all closed.
+	Policy Policy
+
 	conns *Connections
 
 	mu      sync.Mutex
@@ -67,6 +71,13 @@ func NewDataResolver(webroot string) *DataResolver {
 		handles: map[string]*connHandle{},
 		dicts:   make(map[string]map[string]string),
 		dictErr: make(map[string]string),
+	}
+	// The policy decides which restricted capabilities are available. It is
+	// read once here so every render sees the same settings.
+	if p, err := LoadPolicy(); err == nil {
+		dr.Policy = p
+	} else {
+		dr.Policy = DefaultPolicy()
 	}
 	if c, err := LoadConnections(webroot); err == nil {
 		dr.conns = c
@@ -186,6 +197,20 @@ func driverFor(kind string) string {
 
 // Query runs a read-only SELECT against the given FineReport connection name.
 func (dr *DataResolver) Query(conn, query string) ([]string, [][]any, error) {
+	return dr.query(conn, query, 20000)
+}
+
+// QueryLimited runs a read-only SELECT and stops after limit rows. It is used
+// by the SQL() formula function, whose row cap comes from the policy.
+func (dr *DataResolver) QueryLimited(conn, query string, limit int) ([]string, [][]any, error) {
+	if limit <= 0 {
+		limit = DefaultMaxSQLRows
+	}
+	return dr.query(conn, query, limit)
+}
+
+// query runs a read-only SELECT, stopping after maxRows rows.
+func (dr *DataResolver) query(conn, query string, maxRows int) ([]string, [][]any, error) {
 	conn = strings.TrimSpace(conn)
 	if conn == "" {
 		conn = "FRDemo"
@@ -216,7 +241,7 @@ func (dr *DataResolver) Query(conn, query string) ([]string, [][]any, error) {
 	}
 	out := make([][]any, 0, 64)
 	for rows.Next() {
-		if len(out) >= 20000 {
+		if len(out) >= maxRows {
 			break
 		}
 		raw := make([]any, len(cols))

@@ -19,6 +19,9 @@ type EvalContext struct {
 	Ident  func(name string) (any, bool)
 	Seq    int
 	Now    time.Time
+	// CurRow is the dataset row the formula sits on. It is the base of the
+	// hierarchical offsets used by cell slices.
+	CurRow int
 	// ReportCell resolves FineReport's cross-report reference
 	// VALUE("report name", row, column). The row and column are 1-based.
 	ReportCell func(report string, row, col int) (any, bool)
@@ -35,6 +38,17 @@ type EvalContext struct {
 	// DatasetGroup returns the value of a dataset group, which is what
 	// FineReport's dataset.group(key) method does.
 	DatasetGroup func(dataset string, key any) (any, bool)
+	// FormulaSQL runs a query for the SQL() formula function. It is only
+	// wired up when the policy allows it.
+	FormulaSQL func(conn, query string, row, col int) (any, error)
+	// Slice evaluates a cell range slice such as C4[!0;!0]A{cond}. The
+	// slice spec is the text between the brackets, the condition is the
+	// optional text between the braces. curRow is the dataset row the
+	// formula sits on, which is the base of the hierarchical offsets.
+	Slice func(cell, spec, condition string, curRow int) (any, error)
+	// LevelOf returns the number of the level a cell sits on inside the
+	// expansion. It backs FineReport's hierarchical reference "&A3".
+	LevelOf func(ref string) (any, bool)
 }
 
 func NewEvalContext() *EvalContext {
@@ -49,9 +63,26 @@ type litExpr struct{ v any }
 
 func (e litExpr) eval(*EvalContext) (any, error) { return e.v, nil }
 
-type refExpr struct{ ref string }
+type refExpr struct {
+	ref string
+	// absolute marks FineReport's "&A3" form, where the reference stays
+	// with the cell it names instead of following the expansion.
+	absolute bool
+}
 
 func (e refExpr) eval(ctx *EvalContext) (any, error) {
+	// The hierarchical form "&A3" yields the number of the level the
+	// cell sits on.
+	if e.absolute {
+		if ctx.LevelOf == nil {
+			return nil, fmt.Errorf("无法解析层次引用 %s", e.ref)
+		}
+		v, ok := ctx.LevelOf(e.ref)
+		if !ok {
+			return nil, fmt.Errorf("无法解析层次引用 %s", e.ref)
+		}
+		return v, nil
+	}
 	if ctx.Ref == nil {
 		return nil, fmt.Errorf("无法解析单元格 %s", e.ref)
 	}
@@ -155,7 +186,16 @@ type methodCallExpr struct {
 // argText returns the raw text of an argument. It is used where FineReport
 // expects a name rather than a value, such as a dataset column or a filter
 // condition. A comparison is rendered back to its source form.
+//
+// A cell reference resolves to the text of that cell, because a column may
+// be named by a cell that holds the name.
 func (e methodCallExpr) argText(i int) string {
+	return e.argTextIn(i, nil)
+}
+
+// argTextIn resolves an argument to text, using ctx to look up cell
+// references.
+func (e methodCallExpr) argTextIn(i int, ctx *EvalContext) string {
 	if i >= len(e.args) {
 		return ""
 	}
@@ -166,14 +206,21 @@ func (e methodCallExpr) argText(i int) string {
 		return a.name
 	case paramExpr:
 		return a.name
+	case refExpr:
+		if ctx != nil && ctx.Ref != nil {
+			if v, ok := ctx.Ref(a.ref); ok {
+				return stringOf(v)
+			}
+		}
+		return a.ref
 	case binExpr:
-		return exprText(a.l) + a.op + exprText(a.r)
+		return exprTextIn(a.l, ctx) + a.op + exprTextIn(a.r, ctx)
 	}
 	return ""
 }
 
-// exprText renders a literal or identifier back to source text.
-func exprText(e formulaExpr) string {
+// exprTextIn renders a literal, identifier or cell reference to text.
+func exprTextIn(e formulaExpr, ctx *EvalContext) string {
 	switch a := e.(type) {
 	case litExpr:
 		return stringOf(a.v)
@@ -181,6 +228,13 @@ func exprText(e formulaExpr) string {
 		return a.name
 	case paramExpr:
 		return a.name
+	case refExpr:
+		if ctx != nil && ctx.Ref != nil {
+			if v, ok := ctx.Ref(a.ref); ok {
+				return stringOf(v)
+			}
+		}
+		return a.ref
 	}
 	return ""
 }
@@ -193,8 +247,9 @@ func (e methodCallExpr) eval(ctx *EvalContext) (any, error) {
 			return nil, fmt.Errorf("%s.select 缺少列名", e.receiver)
 		}
 		// The column name is an identifier, not an expression, so it is
-		// taken verbatim instead of being evaluated.
-		col := e.argText(0)
+		// taken verbatim instead of being evaluated. A cell reference
+		// resolves to the name that cell holds.
+		col := e.argTextIn(0, ctx)
 		if col == "" {
 			return nil, fmt.Errorf("%s.select 缺少列名", e.receiver)
 		}
@@ -342,6 +397,26 @@ type binExpr struct {
 }
 
 func (e binExpr) eval(ctx *EvalContext) (any, error) {
+	// The logic operators short-circuit, so the right side is only
+	// evaluated when it can still change the result.
+	if e.op == "||" || e.op == "&&" {
+		lv, err := e.l.eval(ctx)
+		if err != nil {
+			return nil, err
+		}
+		lt := truthy(scalar(lv))
+		if e.op == "&&" && !lt {
+			return false, nil
+		}
+		if e.op == "||" && lt {
+			return true, nil
+		}
+		rv, err := e.r.eval(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return truthy(scalar(rv)), nil
+	}
 	lv, err := e.l.eval(ctx)
 	if err != nil {
 		return nil, err
@@ -392,6 +467,10 @@ func elemAt(v []any, i int) any {
 
 func applyBinary(op string, a, b any) (any, error) {
 	switch op {
+	case "||":
+		return truthy(a) || truthy(b), nil
+	case "&&":
+		return truthy(a) && truthy(b), nil
 	case "&":
 		return stringOf(a) + stringOf(b), nil
 	case "+":
@@ -780,6 +859,24 @@ func (e callExpr) eval(ctx *EvalContext) (any, error) {
 			out[i] = c
 		}
 		return out, nil
+	case "SQL":
+		// SQL("connection", "select ...", row, column) runs a read-only
+		// query and returns one cell of the result. The capability is
+		// closed unless the policy allows it.
+		if len(vals) < 4 {
+			return nil, fmt.Errorf("SQL 需要四个参数")
+		}
+		if ctx.FormulaSQL == nil {
+			return nil, &PolicyError{Feature: "SQL() 公式函数", Switch: "RV_ALLOW_FORMULA_SQL=1"}
+		}
+		conn := stringOf(vals[0])
+		query := stringOf(vals[1])
+		row, ok1 := toFloat(vals[2])
+		col, ok2 := toFloat(vals[3])
+		if !ok1 || !ok2 {
+			return nil, fmt.Errorf("SQL 的行列参数不是数值")
+		}
+		return ctx.FormulaSQL(conn, query, int(row), int(col))
 	case "TODAY":
 		t := ctx.now()
 		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()), nil
@@ -1603,6 +1700,7 @@ const (
 	tkColonPlus
 	tkSheet
 	tkDot
+	tkAmpIdent
 )
 
 type token struct {
@@ -1763,6 +1861,22 @@ func lexFormula(s string) ([]token, error) {
 				continue
 			}
 			return nil, fmt.Errorf("无法识别的字符 '.'")
+		case c == '&':
+			// "&&" is the logic-and operator, "&A3" is FineReport's
+			// hierarchical reference, and a standalone "&" concatenates
+			// two strings.
+			if i+1 < len(s) && s[i+1] == '&' {
+				toks = append(toks, token{kind: tkOp, text: "&&"})
+				i += 2
+				continue
+			}
+			if hasCellRefAfter(s, i+1) {
+				toks = append(toks, token{kind: tkAmpIdent, text: "&"})
+				i++
+				continue
+			}
+			toks = append(toks, token{kind: tkOp, text: "&"})
+			i++
 		default:
 			op := ""
 			if i+1 < len(s) {
@@ -1770,11 +1884,14 @@ func lexFormula(s string) ([]token, error) {
 				switch two {
 				case "<=", ">=", "<>", "!=", "==":
 					op = two
+				case "||":
+					// The short-circuiting logic or.
+					op = two
 				}
 			}
 			if op == "" {
 				switch c {
-				case '+', '-', '*', '/', '%', '&', '=', '<', '>', '^':
+				case '+', '-', '*', '/', '%', '=', '<', '>', '^':
 					op = string(c)
 				}
 			}
@@ -1787,6 +1904,31 @@ func lexFormula(s string) ([]token, error) {
 	}
 	toks = append(toks, token{kind: tkEOF})
 	return toks, nil
+}
+
+// hasCellRefAfter reports whether a cell reference starts at position i.
+// It is used to tell FineReport's absolute reference "&A3" apart from the
+// string concatenation operator, which may also be followed by a name.
+func hasCellRefAfter(s string, i int) bool {
+	j := i
+	if j < len(s) && s[j] == '$' {
+		j++
+	}
+	start := j
+	for j < len(s) && isLetter(s[j]) {
+		j++
+	}
+	if j == start || j-start > 3 {
+		return false
+	}
+	if j < len(s) && s[j] == '$' {
+		j++
+	}
+	digits := j
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		j++
+	}
+	return j > digits
 }
 
 func isLetter(c byte) bool {
@@ -1845,7 +1987,7 @@ func (p *formulaParser) next() token {
 }
 
 func (p *formulaParser) parse() (formulaExpr, error) {
-	e, err := p.parseComparison()
+	e, err := p.parseLogic()
 	if err != nil {
 		return nil, err
 	}
@@ -1869,6 +2011,32 @@ func (p *formulaParser) parseComparison() (formulaExpr, error) {
 		case "=", "==", "<>", "!=", "<", ">", "<=", ">=":
 			p.next()
 			right, err := p.parseConcat()
+			if err != nil {
+				return nil, err
+			}
+			left = binExpr{op: t.text, l: left, r: right}
+		default:
+			return left, nil
+		}
+	}
+}
+
+// parseLogic parses the short-circuiting logic operators, which sit below
+// the comparisons: "a || b" and "a && b".
+func (p *formulaParser) parseLogic() (formulaExpr, error) {
+	left, err := p.parseComparison()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		t := p.peek()
+		if t.kind != tkOp {
+			return left, nil
+		}
+		switch t.text {
+		case "||", "&&":
+			p.next()
+			right, err := p.parseComparison()
 			if err != nil {
 				return nil, err
 			}
@@ -2024,6 +2192,15 @@ func (p *formulaParser) parsePrimary() (formulaExpr, error) {
 		}
 		cellTok := p.next()
 		return sheetRefExpr{sheet: t.text, ref: strings.ToUpper(cellTok.text)}, nil
+	case tkAmpIdent:
+		// "&A3" is FineReport's hierarchical reference: it yields the
+		// number of the level the cell sits on, which is how a template
+		// detects the first row ("if(&A3 = 1, 0, ...)").
+		if p.peek().kind != tkIdent {
+			return nil, fmt.Errorf("层次引用的单元格地址无效")
+		}
+		cellTok := p.next()
+		return refExpr{ref: strings.ToUpper(cellTok.text), absolute: true}, nil
 	case tkLParen:
 		e, err := p.parseComparison()
 		if err != nil {
@@ -2052,7 +2229,7 @@ func (p *formulaParser) parsePrimary() (formulaExpr, error) {
 				return call, nil
 			}
 			for {
-				arg, err := p.parseComparison()
+				arg, err := p.parseLogic()
 				if err != nil {
 					return nil, err
 				}
@@ -2077,7 +2254,7 @@ func (p *formulaParser) parsePrimary() (formulaExpr, error) {
 				return call, nil
 			}
 			for {
-				arg, err := p.parseComparison()
+				arg, err := p.parseLogic()
 				if err != nil {
 					return nil, err
 				}
@@ -2113,11 +2290,94 @@ func (p *formulaParser) parsePrimary() (formulaExpr, error) {
 			return rangeExpr{start: ref, end: strings.ToUpper(endTok.text)}, nil
 		}
 		if isCellRef(ref) {
+			// A slice such as C4[!0;!0]A{cond} follows the cell reference.
+			if p.peek().kind == tkLBracket {
+				spec, err := p.parseSliceSpec()
+				if err != nil {
+					return nil, err
+				}
+				// The trailing "A" type marker and the optional condition
+				// may come in either order: "C4[!0]A{cond}".
+				cond := ""
+				for {
+					if p.peek().kind == tkIdent && strings.EqualFold(p.peek().text, "A") {
+						p.next()
+						continue
+					}
+					if p.peek().kind == tkLBrace {
+						cond, err = p.parseSliceCondition()
+						if err != nil {
+							return nil, err
+						}
+						continue
+					}
+					break
+				}
+				return sliceExpr{cell: ref, spec: spec, condition: cond}, nil
+			}
 			return refExpr{ref: ref}, nil
 		}
 		return identExpr{name: t.text}, nil
 	}
 	return nil, fmt.Errorf("公式语法错误，意外的 %q", t.text)
+}
+
+// parseSliceSpec reads the text between the brackets of a cell slice, such
+// as "!0;!0" or "B4:-1". The text is kept verbatim because it describes a
+// region in FineReport's own notation.
+//
+// The opening bracket is the current token, so it is consumed first.
+func (p *formulaParser) parseSliceSpec() (string, error) {
+	// Skip the opening bracket.
+	p.next()
+	var b strings.Builder
+	for {
+		t := p.next()
+		switch t.kind {
+		case tkEOF:
+			return "", fmt.Errorf("切片缺少右方括号")
+		case tkRBracket:
+			return b.String(), nil
+		default:
+			b.WriteString(t.text)
+		}
+	}
+}
+
+// parseSliceCondition reads the text between the braces of a cell slice,
+// such as "C4 > $C4 && A4 = $A4".
+//
+// The opening brace is the current token, so it is consumed first.
+func (p *formulaParser) parseSliceCondition() (string, error) {
+	// Skip the opening brace.
+	p.next()
+	var b strings.Builder
+	for {
+		t := p.next()
+		switch t.kind {
+		case tkEOF:
+			return "", fmt.Errorf("切片条件缺少右花括号")
+		case tkRBrace:
+			return b.String(), nil
+		default:
+			b.WriteString(t.text)
+		}
+	}
+}
+
+// sliceExpr evaluates a FineReport cell slice such as
+// C4[!0;!0]A{C4 > $C4}.
+type sliceExpr struct {
+	cell      string
+	spec      string
+	condition string
+}
+
+func (e sliceExpr) eval(ctx *EvalContext) (any, error) {
+	if ctx.Slice == nil {
+		return nil, fmt.Errorf("不支持单元格切片 %s[%s]A", e.cell, e.spec)
+	}
+	return ctx.Slice(e.cell, e.spec, e.condition, ctx.CurRow)
 }
 
 // EvalFormula parses and evaluates a FineReport formula without the leading '='.

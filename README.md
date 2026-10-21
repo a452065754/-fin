@@ -49,7 +49,7 @@ python3 tools/verify_docs.py
 ## 快速开始
 
 ```bash
-go build -o bin/reportviewer.exe ./cmd/reportviewer
+bash tools/build_windows.sh bin/reportviewer.exe
 ./bin/reportviewer.exe                    # 默认 :8090
 ./bin/reportviewer.exe -addr :9000         # 换端口
 FR_WEBROOT=D:\tomcat\webapps\webroot ./bin/reportviewer.exe   # 指定 webroot
@@ -138,7 +138,7 @@ FINE_PWD_<UTF-8 十六进制>    连接名含中文时，如 气密检测77 → 
 
 ```bash
 export GOCACHE=$(pwd)/.gocache    # Windows 下若默认缓存目录不可写
-go test ./...                     # 102 例
+go test ./...                     # 115 例
 ```
 
 测试依赖本机存在 FineReport webroot（默认 `F:/tomcat-win64/webapps/webroot`）。

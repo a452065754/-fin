@@ -38,8 +38,7 @@ type Server struct {
 	cache *PreviewCache
 	// templateTimes tracks when each cached entry's template was last
 	// modified, so an edited template is not served from the cache.
-	templateTimes *templateTimes
-	// audit records who looked at which report.
+	templateTimes *templateTimes	// audit records who looked at which report.
 	audit *AuditLog
 	// perf collects per-template rendering statistics.
 	perf *PerfStats
@@ -109,6 +108,18 @@ func (s *Server) Close() {
 		s.audit.Close()
 	}
 	s.dr.Close()
+}
+
+// Policy returns the security policy that decides which restricted
+// capabilities the templates may use.
+func (s *Server) Policy() fr.Policy {
+	return s.dr.Policy
+}
+
+// SetPolicy replaces the security policy. The command line uses it to
+// override the configuration file and the environment.
+func (s *Server) SetPolicy(p fr.Policy) {
+	s.dr.Policy = p
 }
 
 // Handler returns the HTTP handler with the middleware chain applied:

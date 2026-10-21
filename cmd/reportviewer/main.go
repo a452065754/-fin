@@ -21,6 +21,9 @@ func main() {
 	webroot := flag.String("webroot", defaultRoot, "FineReport webroot 目录（含 WEB-INF）")
 	reportlets := flag.String("reportlets", "", "模板目录，默认 <webroot>/WEB-INF/reportlets")
 	addr := flag.String("addr", ":8090", "HTTP 监听地址")
+	allowSQL := flag.Bool("allow-formula-sql", false, "允许公式里的 SQL() 函数执行查询（默认关闭）")
+	allowCrossReport := flag.Bool("allow-cross-report", false, "允许公式跨报表取值（默认关闭）")
+	allowCrossSheet := flag.Bool("allow-cross-sheet", false, "允许公式跨工作表引用（默认关闭）")
 	flag.Parse()
 
 	srv, err := server.New(*webroot, *reportlets)
@@ -28,6 +31,17 @@ func main() {
 		log.Fatalf("启动失败: %v", err)
 	}
 	defer srv.Close()
+
+	// The command line switches override the configuration file and the
+	// environment, so an operator can tighten or loosen the policy without
+	// editing files.
+	p := srv.Policy()
+	p.FormulaSQL = p.FormulaSQL || *allowSQL
+	p.CrossReport = p.CrossReport || *allowCrossReport
+	p.CrossSheet = p.CrossSheet || *allowCrossSheet
+	srv.SetPolicy(p)
+	log.Printf("安全防护: SQL公式=%v 跨报表=%v 跨表=%v",
+		p.FormulaSQL, p.CrossReport, p.CrossSheet)
 
 	httpSrv := &http.Server{
 		Addr:              *addr,

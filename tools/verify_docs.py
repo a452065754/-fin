@@ -216,10 +216,13 @@ def check_numbers():
     main_go = os.path.join(ROOT, "cmd", "reportviewer", "main.go")
     if os.path.exists(main_go):
         with open(main_go, encoding="utf-8") as f:
-            flags = set(re.findall(r'flag\.String\("(\w+)"', f.read()))
+            src = f.read()
+        flags = set(re.findall(r'flag\.String\("([\w-]+)"', src))
+        flags |= set(re.findall(r'flag\.Bool\("([\w-]+)"', src))
+        flags |= set(re.findall(r'flag\.Int\("([\w-]+)"', src))
         deploy = read(os.path.join(DOCS, "部署.md")) if os.path.exists(
             os.path.join(DOCS, "部署.md")) else ""
-        for fl in flags:
+        for fl in sorted(flags):
             if "-%s" % fl not in deploy:
                 err("部署.md 未记录参数: -%s" % fl)
         note("命令行参数: %d 个" % len(flags))

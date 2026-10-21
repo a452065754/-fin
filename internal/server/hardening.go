@@ -184,6 +184,7 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		"total":       len(conns),
 		"metrics":     s.metrics.Snapshot(),
 		"cache":       s.cache.Stats(),
+		"policy":      s.Policy().Summary(),
 	}
 	writeJSON(w, http.StatusOK, body)
 }

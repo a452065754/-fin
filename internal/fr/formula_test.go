@@ -1,6 +1,8 @@
 package fr
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -607,5 +609,105 @@ func TestFormulaNumericTolerance(t *testing.T) {
 	got := evalNum(t, "ROUND(2.5, 0)", nil)
 	if math.Abs(got-3) > 1e-9 {
 		t.Errorf("ROUND(2.5) = %v, want 3", got)
+	}
+}
+
+func TestFormulaSliceSyntax(t *testing.T) {
+	ctx := NewEvalContext()
+	ctx.CurRow = 3
+	ctx.Slice = func(cell, spec, condition string, curRow int) (any, error) {
+		return fmt.Sprintf("%s|%s|%s|%d", cell, spec, condition, curRow), nil
+	}
+	v := evalOK(t, "C4[!0;!0]A", ctx)
+	if v != "C4|!0;!0||3" {
+		t.Errorf("slice = %#v", v)
+	}
+	// The condition between the braces is passed along. The lexer drops
+	// whitespace, so the text comes back without spaces.
+	v = evalOK(t, "C4[!0]A{C4 > $C4}", ctx)
+	if v != "C4|!0|C4>$C4|3" {
+		t.Errorf("slice with condition = %#v", v)
+	}
+}
+
+func TestFormulaSliceNotSupported(t *testing.T) {
+	if _, err := EvalFormula("C4[!0]A", NewEvalContext()); err == nil {
+		t.Error("expected a slice without a hook to fail")
+	}
+}
+
+func TestFormulaHierarchicalReference(t *testing.T) {
+	ctx := NewEvalContext()
+	ctx.LevelOf = func(ref string) (any, bool) {
+		if ref == "A3" {
+			return float64(1), true
+		}
+		return nil, false
+	}
+	// "&A3" is a hierarchical reference: it yields the number of the
+	// level the cell sits on, which is how a template detects the first
+	// row of an expansion.
+	if got := evalNum(t, "&A3", ctx); got != 1 {
+		t.Errorf("&A3 = %v, want 1", got)
+	}
+	if v := evalOK(t, "IF(&A3 = 1, 0, 99)", ctx); v != float64(0) {
+		t.Errorf("IF(&A3 = 1) = %#v, want 0", v)
+	}
+	// Without the hook the reference is an error.
+	if _, err := EvalFormula("&A3", NewEvalContext()); err == nil {
+		t.Error("expected a hierarchical reference without a hook to fail")
+	}
+}
+
+func TestFormulaLogicOperators(t *testing.T) {
+	if v := evalOK(t, "1 = 1 || 2 = 3", nil); v != true {
+		t.Errorf("|| = %#v", v)
+	}
+	if v := evalOK(t, "1 = 1 && 2 = 2", nil); v != true {
+		t.Errorf("&& = %#v", v)
+	}
+	if v := evalOK(t, "1 = 2 && 2 = 2", nil); v != false {
+		t.Errorf("&& false = %#v", v)
+	}
+	// The operators short-circuit, so a failing right side is not an error.
+	if v := evalOK(t, "1 = 0 && 1/0 = 1", nil); v != false {
+		t.Errorf("&& short circuit = %#v", v)
+	}
+	if v := evalOK(t, "1 = 1 || 1/0 = 1", nil); v != true {
+		t.Errorf("|| short circuit = %#v", v)
+	}
+	// They also work inside a function call.
+	if v := evalOK(t, "IF(1 = 0 || LEN(\"ab\") = 0, \"x\", \"y\")", nil); v != "y" {
+		t.Errorf("IF with || = %#v", v)
+	}
+}
+
+func TestFormulaSQLIsBlockedByDefault(t *testing.T) {
+	// The SQL function needs a hook; without one the policy blocks it.
+	_, err := EvalFormula(`SQL("FRDemo", "SELECT 1", 1, 1)`, NewEvalContext())
+	if err == nil {
+		t.Fatal("expected SQL to be blocked by default")
+	}
+	var pe *PolicyError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected a PolicyError, got %v", err)
+	}
+	if !strings.Contains(pe.Switch, "RV_ALLOW_FORMULA_SQL") {
+		t.Errorf("the error should name the switch: %v", err)
+	}
+}
+
+func TestFormulaSQLWithHook(t *testing.T) {
+	ctx := NewEvalContext()
+	ctx.FormulaSQL = func(conn, query string, row, col int) (any, error) {
+		return fmt.Sprintf("%s|%s|%d|%d", conn, query, row, col), nil
+	}
+	v := evalOK(t, `SQL("FRDemo", "SELECT 1", 8, 23)`, ctx)
+	if v != "FRDemo|SELECT 1|8|23" {
+		t.Errorf("SQL = %#v", v)
+	}
+	// The argument count is checked.
+	if _, err := EvalFormula(`SQL("FRDemo", "SELECT 1")`, ctx); err == nil {
+		t.Error("expected SQL with too few arguments to fail")
 	}
 }
