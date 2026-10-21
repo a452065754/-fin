@@ -393,6 +393,24 @@ func plainValue(v any) string {
 		return strconv.Itoa(t)
 	case bool:
 		return strconv.FormatBool(t)
+	case []any:
+		parts := make([]string, len(t))
+		for i, e := range t {
+			parts[i] = plainValue(e)
+		}
+		return strings.Join(parts, " ")
+	case []float64:
+		parts := make([]string, len(t))
+		for i, e := range t {
+			parts[i] = plainValue(e)
+		}
+		return strings.Join(parts, " ")
+	case []int:
+		parts := make([]string, len(t))
+		for i, e := range t {
+			parts[i] = strconv.Itoa(e)
+		}
+		return strings.Join(parts, " ")
 	default:
 		return fmt.Sprint(t)
 	}

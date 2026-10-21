@@ -60,6 +60,9 @@ type CellTemplate struct {
 	HasExpand    bool
 	RGMode       int
 	HasRG        bool
+	// RGSummary reports whether the cell's grouper is a SummaryGrouper
+	// (aggregate such as sum) rather than a plain value grouper.
+	RGSummary bool
 	Dict         *DictSpec
 	Style        Style
 	ChartXML     *XNode
@@ -351,6 +354,9 @@ func parseCell(c *XNode, styles []Style) *CellTemplate {
 	if rg != nil {
 		ct.HasRG = true
 		ct.RGMode = rg.AttrInt("divideMode", 0)
+		if strings.Contains(rg.Attr("class"), "SummaryGrouper") {
+			ct.RGSummary = true
+		}
 	}
 	if p := c.Child("Present"); p != nil {
 		if d := p.Child("Dictionary"); d != nil {

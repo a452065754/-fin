@@ -776,11 +776,86 @@ func (e callExpr) eval(ctx *EvalContext) (any, error) {
 		}
 		return strings.ToLower(stringOf(vals[0])), nil
 	case "VALUE":
-		// VALUE(text) converts text to a number. VALUE(report, row, col)
-		// reads a cell from another report, which is how FineReport links
-		// a narrative report to its data tables.
+		// VALUE(text) converts text to a number. When the first argument
+		// names a dataset the FineReport semantics switch to the dataset
+		// forms: VALUE(ds, targetCol, row) reads one cell and
+		// VALUE(ds, targetCol, filterCol, filterValue) collects the target
+		// column values of every row matching the filter.
 		if len(vals) >= 3 {
 			name := stringOf(vals[0])
+			var fields []string
+			isDataset := false
+			if ctx.DatasetFields != nil {
+				fields, isDataset = ctx.DatasetFields(name)
+			}
+			if isDataset {
+				resolve := func(spec any) (int, error) {
+					switch t := spec.(type) {
+					case string:
+						for i, c := range fields {
+							if strings.EqualFold(c, t) {
+								return i, nil
+							}
+						}
+						if n, err := strconv.Atoi(strings.TrimSpace(t)); err == nil && n >= 1 && n <= len(fields) {
+							return n - 1, nil
+						}
+						return -1, fmt.Errorf("数据集 %s 中找不到列 %s", name, t)
+					default:
+						n, ok := toFloat(spec)
+						if !ok || n < 1 || n > float64(len(fields)) {
+							return -1, fmt.Errorf("数据集 %s 的列号超出范围", name)
+						}
+						return int(n) - 1, nil
+					}
+				}
+				ti, err := resolve(vals[1])
+				if err != nil {
+					return nil, err
+				}
+				if ctx.DatasetColumnValues == nil {
+					return nil, fmt.Errorf("无法读取数据集 %s", name)
+				}
+				targets, ok := ctx.DatasetColumnValues(name, fields[ti])
+				if !ok {
+					return nil, fmt.Errorf("无法读取数据集 %s 的列 %s", name, fields[ti])
+				}
+				if len(vals) >= 4 {
+					ci, err := resolve(vals[2])
+					if err != nil {
+						return nil, err
+					}
+					conds, ok2 := ctx.DatasetColumnValues(name, fields[ci])
+					if !ok2 {
+						return nil, fmt.Errorf("无法读取数据集 %s 的列 %s", name, fields[ci])
+					}
+					var out []any
+					for i, cv := range conds {
+						if i >= len(targets) {
+							break
+						}
+						if valueMatches(cv, vals[3]) {
+							out = append(out, targets[i])
+						}
+					}
+					if len(out) == 1 {
+						return out[0], nil
+					}
+					return out, nil
+				}
+				rown, ok := toFloat(vals[2])
+				if !ok {
+					return nil, fmt.Errorf("VALUE 的行号参数不是数值")
+				}
+				r := int(rown) - 1
+				if r < 0 || r >= len(targets) {
+					return nil, fmt.Errorf("数据集 %s 中不存在第 %d 行", name, int(rown))
+				}
+				return targets[r], nil
+			}
+			// VALUE(report, row, col) reads a cell from another report,
+			// which is how FineReport links a narrative report to its data
+			// tables.
 			row, ok1 := toFloat(vals[1])
 			col, ok2 := toFloat(vals[2])
 			if !ok1 || !ok2 {
@@ -801,12 +876,22 @@ func (e callExpr) eval(ctx *EvalContext) (any, error) {
 		f, _ := toFloat(vals[0])
 		return f, nil
 	case "RANGE":
-		// RANGE(start, end) builds an inclusive sequence of numbers.
-		if len(vals) < 2 {
-			return nil, fmt.Errorf("RANGE 需要两个参数")
+		// RANGE(end) builds 1..end; RANGE(start, end) builds start..end.
+		// FineReport lets RANGE take a single argument, defaulting the
+		// start to 1.
+		if len(vals) < 1 {
+			return nil, fmt.Errorf("RANGE 至少需要一个参数")
 		}
-		a, ok1 := toFloat(vals[0])
-		b, ok2 := toFloat(vals[1])
+		a := 1.0
+		var b float64
+		var ok1, ok2 bool
+		if len(vals) >= 2 {
+			a, ok1 = toFloat(vals[0])
+			b, ok2 = toFloat(vals[1])
+		} else {
+			b, ok2 = toFloat(vals[0])
+			ok1 = true
+		}
 		if !ok1 || !ok2 {
 			return nil, fmt.Errorf("RANGE 参数不是数值")
 		}
@@ -1588,6 +1673,27 @@ func truthy(v any) bool {
 	return true
 }
 
+// valueMatches compares a dataset value against a filter value the way
+// FineReport's VALUE(ds, col, filterCol, filterValue) does: string-wise when
+// either side is a string, numerically when both parse as numbers.
+func valueMatches(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if _, ok := a.(string); ok {
+		return stringOf(a) == stringOf(b)
+	}
+	if _, ok := b.(string); ok {
+		return stringOf(a) == stringOf(b)
+	}
+	af, ok1 := toFloat(a)
+	bf, ok2 := toFloat(b)
+	if ok1 && ok2 {
+		return af == bf
+	}
+	return stringOf(a) == stringOf(b)
+}
+
 func stringOf(v any) string {
 	if v == nil {
 		return ""
@@ -2359,6 +2465,14 @@ func (p *formulaParser) parseSliceCondition() (string, error) {
 			return "", fmt.Errorf("切片条件缺少右花括号")
 		case tkRBrace:
 			return b.String(), nil
+		case tkString:
+			// The lexer keeps only the inner text of a string token, so the
+			// quotes must be re-added. Without them the re-parsed condition
+			// would treat "孙林" as an identifier and fail with
+			// "未知标识符 孙林".
+			b.WriteByte('"')
+			b.WriteString(t.text)
+			b.WriteByte('"')
 		default:
 			b.WriteString(t.text)
 		}

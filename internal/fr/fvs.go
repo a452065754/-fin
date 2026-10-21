@@ -560,12 +560,23 @@ func (t *FVSTemplate) imageURL(w *FVSWidget) string {
 }
 
 func (t *FVSTemplate) chartSpec(st *renderState, w *FVSWidget) *ChartSpec {
+	// FVS charts are usually stored as a separate .chart file referenced by
+	// configFile, but many templates (including the built-in demos) embed the
+	// full chart XML inside the widget's stringChartCollection property. When
+	// no standalone file is present we fall back to that embedded XML so the
+	// dashboard still paints.
 	member := t.memberFor(w, t.charts, ".chart")
-	if member == "" {
+	var xmlBytes []byte
+	if member != "" {
+		xmlBytes = t.charts[member]
+	} else if sc := fvsStr(w.Props, "stringChartCollection"); sc != "" {
+		xmlBytes = []byte(sc)
+	}
+	if xmlBytes == nil {
 		st.warn("FVS 图表缺少配置文件: " + w.Name)
 		return nil
 	}
-	root, err := ParseXML(t.charts[member])
+	root, err := ParseXML(xmlBytes)
 	if err != nil {
 		st.warn(fmt.Sprintf("图表 %s 解析失败: %v", w.Name, err))
 		return nil
@@ -767,7 +778,14 @@ func fvsRichText(st *renderState, props map[string]any) (string, string, TextSty
 	if v := fvsStr(props, "textAlign"); v != "" {
 		ts.Align = v
 	}
+	// FineReport stores the rich-text runs either under "values" or, in
+	// newer templates, under "value". Both hold the same run list.
 	runs, _ := props["values"].([]any)
+	if len(runs) == 0 {
+		if list, ok := props["value"].([]any); ok {
+			runs = list
+		}
+	}
 	if len(runs) == 0 {
 		plain := st.substitute(fvsStr(props, "value"))
 		return plain, strings.ReplaceAll(html.EscapeString(plain), "\n", "<br/>"), ts
@@ -780,7 +798,7 @@ func fvsRichText(st *renderState, props map[string]any) (string, string, TextSty
 		if run == nil {
 			continue
 		}
-		insert := st.substitute(fvsStr(run, "insert"))
+		insert := fvsRunText(st, run)
 		plain.WriteString(insert)
 		attrs := fvsMap(run, "attributes")
 		var css []string
@@ -820,6 +838,31 @@ func fvsRichText(st *renderState, props map[string]any) (string, string, TextSty
 		}
 	}
 	return plain.String(), body.String(), ts
+}
+
+// fvsRunText resolves the text of one rich-text run. The "insert" value is
+// either a plain string or a formula object such as
+// {"fr-formula": {"fx": "=sum(VALUE(...))"}}; printing the object directly
+// would leak Go map syntax into the dashboard.
+func fvsRunText(st *renderState, run map[string]any) string {
+	switch ins := run["insert"].(type) {
+	case string:
+		return st.substitute(ins)
+	case map[string]any:
+		if f, ok := ins["fr-formula"].(map[string]any); ok {
+			fx := strings.TrimSpace(fvsStr(f, "fx"))
+			if fx == "" {
+				return fvsStr(f, "text")
+			}
+			return stringOf(st.evalStandalone(fx))
+		}
+		if t, ok := ins["text"].(string); ok {
+			return st.substitute(t)
+		}
+		return fvsStr(ins, "text")
+	default:
+		return st.substitute(fvsStr(run, "insert"))
+	}
 }
 
 func fvsTimeText(props map[string]any) (string, TextStyle) {

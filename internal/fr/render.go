@@ -128,6 +128,10 @@ func (r *renderState) renderSheet(sh *SheetTemplate) *Sheet {
 	}
 	var out *Sheet
 	switch {
+	case vCount > 0 && hCount > 0:
+		// Both bands: a cross-tab. The vertical renderer alone would drop
+		// the horizontal expansion and empty the cross cells.
+		out = r.renderCross(sh)
 	case vCount > 0:
 		out = r.renderVertical(sh)
 	case hCount > 0:
@@ -278,6 +282,13 @@ func (r *renderState) chartFor(ct *CellTemplate) *ChartSpec {
 func (r *renderState) dsValue(ct *CellTemplate, row int) any {
 	ds := r.tpl.Datasets[ct.DSName]
 	if ds == nil {
+		// FineReport lets a dataset column omit the dataset name and fall
+		// back to the template's default (first declared) dataset.
+		if def := r.defaultDataset(); def != nil {
+			ds = def
+		}
+	}
+	if ds == nil {
 		r.warn("找不到数据集 " + ct.DSName)
 		return nil
 	}
@@ -293,6 +304,24 @@ func (r *renderState) dsValue(ct *CellTemplate, row int) any {
 		return nil
 	}
 	return ds.Rows[row][idx]
+}
+
+// defaultDataset returns the first declared dataset, preferring one that is
+// already loaded. Dataset-bound cells that omit a dataset name resolve here.
+func (r *renderState) defaultDataset() *Dataset {
+	var first, loaded *Dataset
+	for _, ds := range r.tpl.Datasets {
+		if first == nil {
+			first = ds
+		}
+		if ds.Loaded && loaded == nil {
+			loaded = ds
+		}
+	}
+	if loaded != nil {
+		return loaded
+	}
+	return first
 }
 
 func (r *renderState) evalFormula(ct *CellTemplate, ref func(string) (any, bool), rng func(string, string) (any, bool), seq int) any {
@@ -317,6 +346,26 @@ func (r *renderState) evalFormula(ct *CellTemplate, ref func(string) (any, bool)
 	v, err := EvalFormula(ct.Formula, ctx)
 	if err != nil {
 		r.warn(fmt.Sprintf("公式 %s 计算失败: %v", strings.TrimSpace(ct.Formula), err))
+		return "#ERROR"
+	}
+	return v
+}
+
+// evalStandalone evaluates a formula that is not attached to a report cell,
+// such as the fr-formula runs inside an FVS text widget. Only dataset and
+// parameter hooks are available; report cell references resolve to nothing.
+func (r *renderState) evalStandalone(formula string) any {
+	ctx := NewEvalContext()
+	ctx.Params = r.paramVal
+	ctx.DatasetFields = r.datasetFields
+	ctx.DatasetColumnValues = r.datasetColumnValues
+	ctx.DatasetGroup = r.datasetGroup
+	ctx.ReportCell = r.reportCell
+	ctx.FormulaSQL = r.formulaSQL
+	ctx.Slice = r.sliceValue
+	v, err := EvalFormula(formula, ctx)
+	if err != nil {
+		r.warn(fmt.Sprintf("公式 %s 计算失败: %v", strings.TrimSpace(formula), err))
 		return "#ERROR"
 	}
 	return v
