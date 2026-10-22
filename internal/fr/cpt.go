@@ -39,6 +39,9 @@ type SheetTemplate struct {
 	MarginR    float64
 	MarginT    float64
 	MarginB    float64
+	// Paging holds the pagination mode read from ReportSettings: "paper"
+	// (paginate by paper size), "content" or "none" (single continuous page).
+	Paging string
 }
 
 type DictSpec struct {
@@ -215,8 +218,25 @@ func (sh *SheetTemplate) parseSizes(rep *XNode) {
 					sh.MarginB = EmuToPx(m.AttrFloat("bottom", 0))
 				}
 			}
+			sh.Paging = detectPagingMode(rs, sh.PaperW)
 		}
 	}
+}
+
+// detectPagingMode reads FineReport's paging setting. When the report has a
+// paper size we default to "paper" (paginate by paper) unless the template
+// explicitly turns vertical paging off.
+func detectPagingMode(rs *XNode, paperW float64) string {
+	if !rs.AttrBool("VerticallyPaging", true) {
+		return "none"
+	}
+	if v := rs.Attr("WebPagingMode"); v == "0" || v == "3" {
+		return "none"
+	}
+	if paperW <= 0 {
+		return "none"
+	}
+	return "paper"
 }
 
 func parseEmuList(text string) []float64 {

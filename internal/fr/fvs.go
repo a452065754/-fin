@@ -41,16 +41,18 @@ type FVSStory struct {
 }
 
 type FVSWidget struct {
-	ID       string
-	Type     string
-	Parent   string
-	Name     string
-	Children []string
-	Hide     bool
-	X, Y     float64
-	W, H     float64
-	Props    map[string]any
-	Order    int
+	ID         string
+	Type       string
+	Parent     string
+	Name       string
+	Children   []string
+	Hide       bool
+	X, Y       float64
+	W, H       float64
+	Props      map[string]any
+	Order      int
+	ClickParam string
+	Link       *WidgetLink
 }
 
 type FVSResource struct {
@@ -84,6 +86,7 @@ type fvsWidgetRaw struct {
 	Children []string       `json:"children"`
 	Hide     bool           `json:"hide"`
 	Props    map[string]any `json:"props"`
+	Actions  []fvsActionRaw `json:"actions"`
 	States   struct {
 		Width  float64   `json:"width"`
 		Height float64   `json:"height"`
@@ -91,6 +94,25 @@ type fvsWidgetRaw struct {
 		Top    float64   `json:"top"`
 		Left   float64   `json:"left"`
 	} `json:"states"`
+}
+
+// fvsActionRaw is a FineVis widget action: chart linkage (widgetLink, feeds a
+// dashboard parameter with the clicked value) or a hyper-link (webPage).
+type fvsActionRaw struct {
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	ActionType string `json:"actionType"`
+	URL        struct {
+		Value    string `json:"value"`
+		PathType string `json:"pathType"`
+	} `json:"url"`
+	Parameters []fvsActionParam `json:"parameters"`
+}
+
+type fvsActionParam struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
 }
 
 type fvsResourceRaw struct {
@@ -228,6 +250,17 @@ func ParseFVSFile(path string) (*FVSTemplate, error) {
 				w.X, w.Y = rw.States.Matrix[4], rw.States.Matrix[5]
 			} else {
 				w.X, w.Y = rw.States.Left, rw.States.Top
+			}
+			for _, a := range rw.Actions {
+				if a.Type == "webPage" && strings.HasPrefix(a.URL.PathType, "url") {
+					w.Link = &WidgetLink{Name: a.Name, URL: a.URL.Value}
+					continue
+				}
+				// Chart linkage: the first parameter receives the clicked
+				// category/series value at runtime.
+				if a.Type == "widgetLink" && len(a.Parameters) > 0 && w.ClickParam == "" {
+					w.ClickParam = a.Parameters[0].Name
+				}
 			}
 			story.Widgets = append(story.Widgets, w)
 		}
@@ -488,6 +521,8 @@ func (t *FVSTemplate) renderWidgets(st *renderState, story *FVSStory) []Widget {
 			continue
 		}
 		ow := Widget{ID: w.ID, Type: w.Type, Parent: w.Parent, X: w.X, Y: w.Y, W: w.W, H: w.H, Z: w.Order}
+		ow.ClickParam = w.ClickParam
+		ow.Link = w.Link
 		if p := nearestPane(w); p != "" {
 			ow.Pane = p
 			if !panes[p].active {

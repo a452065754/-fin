@@ -41,6 +41,38 @@ type Sheet struct {
 	Cols   []float64 `json:"cols"`
 	Rows   []float64 `json:"rows"`
 	Cells  []OutCell `json:"cells"`
+	// Paper carries the report's paper setup (read from PaperSetting) so the
+	// viewer can render on real paper and paginate.
+	Paper *PaperInfo `json:"paper,omitempty"`
+	// Pages holds the printed pages when the report paginates by paper size.
+	// It is empty when the sheet is shown as a single continuous page.
+	Pages []CPTPage `json:"pages,omitempty"`
+	// RepeatRows lists output row indices that are page headers and repeat on
+	// every printed page. Internal; not serialised to the browser.
+	RepeatRows []int `json:"-"`
+}
+
+// PaperInfo describes the report paper used for pagination. All sizes are in
+// pixels at the 96dpi render scale (FineReport's EMU unit ÷ 28575).
+type PaperInfo struct {
+	Width   float64 `json:"width"`  // paper width in px
+	Height  float64 `json:"height"` // paper height in px
+	MarginL float64 `json:"marginL"`
+	MarginR float64 `json:"marginR"`
+	MarginT float64 `json:"marginT"`
+	MarginB float64 `json:"marginB"`
+	Mode    string  `json:"mode"` // "paper" | "content" | "none"
+}
+
+// CPTPage is one printed page of a paginated .cpt sheet. It is a self-
+// contained mini-sheet with remapped row/column indices.
+type CPTPage struct {
+	PageNo int       `json:"pageNo"`
+	Cols   []float64 `json:"cols"`
+	Rows   []float64 `json:"rows"`
+	Cells  []OutCell `json:"cells"`
+	Width  float64   `json:"width"`
+	Height float64   `json:"height"`
 }
 
 type OutCell struct {
@@ -171,7 +203,19 @@ type Widget struct {
 	Chart    *ChartSpec `json:"chart,omitempty"`
 	Sheet    *Sheet     `json:"sheet,omitempty"`
 	Tab      *TabInfo   `json:"tab,omitempty"`
-	Hidden   bool       `json:"hidden,omitempty"`
+	// ClickParam names the dashboard parameter that a chart click feeds
+	// (FineVis chart linkage, e.g. "area"). The browser listens for point
+	// events and refetches the preview with the clicked category value.
+	ClickParam string      `json:"clickParam,omitempty"`
+	Link       *WidgetLink `json:"link,omitempty"`
+	Hidden     bool        `json:"hidden,omitempty"`
+}
+
+// WidgetLink is a FineVis hyper-link action (e.g. the "点击查看FVS详情"
+// text widget that opens a web page).
+type WidgetLink struct {
+	Name string `json:"name,omitempty"`
+	URL  string `json:"url,omitempty"`
 }
 
 type TextStyle struct {

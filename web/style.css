@@ -1471,3 +1471,141 @@ svg {
 .perf-row:hover td {
   background: var(--bg);
 }
+
+/* ---------- FVS chart linkage & link overlay ---------- */
+
+.fvs-widget.fvs-clickable {
+  cursor: pointer;
+}
+
+.fvs-widget.fvs-link .fvs-text {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.fvs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(6, 18, 34, 0.66);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fvs-overlay-panel {
+  width: min(920px, 92vw);
+  height: min(720px, 88vh);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+}
+
+.fvs-overlay-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #16283f;
+  color: #e8eef7;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fvs-overlay-close {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: transparent;
+  color: #e8eef7;
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.fvs-overlay-close:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.fvs-overlay-frame {
+  flex: 1;
+  border: 0;
+  width: 100%;
+}
+
+/* ---------- CPT paper pagination ---------- */
+.paper-page {
+  background: #ffffff;
+  box-shadow: var(--shadow);
+  position: relative;
+}
+
+.paper-content {
+  position: absolute;
+  overflow: hidden;
+}
+
+/* cell fonts already derive from applyCellStyle; the paper canvas keeps the
+   white background so printed pages read like FineReport's paper preview. */
+
+.cpt-pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--panel, #ffffff);
+  border-bottom: 1px solid var(--line, #e5e9f0);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.cpt-pager-btn {
+  border: 1px solid var(--line, #cdd5e3);
+  background: #f5f7fb;
+  border-radius: 6px;
+  padding: 4px 12px;
+  color: var(--ink);
+  transition: background .15s, border-color .15s;
+}
+
+.cpt-pager-btn:hover:not(:disabled) {
+  background: #e9eef7;
+  border-color: #b9c4d6;
+}
+
+.cpt-pager-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.cpt-pager-label {
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.cpt-pager-info {
+  color: var(--muted, #8a94a6);
+  margin-left: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cpt-pager {
+    background: #1b2230;
+    border-bottom-color: #2a3447;
+    color: #e8eef7;
+  }
+  .cpt-pager-btn {
+    background: #232c3d;
+    border-color: #313d52;
+    color: #e8eef7;
+  }
+  .cpt-pager-btn:hover:not(:disabled) {
+    background: #2c3850;
+  }
+  .cpt-pager-info {
+    color: #8694ab;
+  }
+}

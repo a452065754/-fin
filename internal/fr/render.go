@@ -44,6 +44,9 @@ func (t *CPTTemplate) Render(dr *DataResolver, params map[string]string) *Previe
 	for i, sh := range t.Sheets {
 		st.sheetIndex = i
 		sheets[i] = *st.renderSheet(sh)
+		// Slice the finished sheet into paper-sized pages when the template
+		// paginates by paper size. No-op otherwise (single continuous page).
+		st.paginate(sh, &sheets[i])
 		// Keep the finished sheet so a later sheet can reference it.
 		st.renderedSheets = append(st.renderedSheets, sheets[i])
 	}
@@ -150,6 +153,116 @@ func (r *renderState) renderSheet(sh *SheetTemplate) *Sheet {
 		}
 	}
 	return out
+}
+
+// paginate slices a rendered sheet into printed pages that fit the paper
+// height. Header rows (RepeatRows) repeat on every page. It only acts when
+// the sheet is configured to paginate by paper ("paper" mode) and the paper
+// height is known; otherwise the sheet stays a single continuous page.
+func (r *renderState) paginate(sh *SheetTemplate, out *Sheet) {
+	if sh.Paging != "paper" || sh.PaperH <= 0 {
+		return
+	}
+	printableH := sh.PaperH - sh.MarginT - sh.MarginB
+	if printableH <= 0 || len(out.Rows) == 0 {
+		return
+	}
+	out.Paper = &PaperInfo{
+		Width:   sh.PaperW,
+		Height:  sh.PaperH,
+		MarginL: sh.MarginL,
+		MarginR: sh.MarginR,
+		MarginT: sh.MarginT,
+		MarginB: sh.MarginB,
+		Mode:    "paper",
+	}
+	repeatSet := map[int]bool{}
+	for _, rr := range out.RepeatRows {
+		if rr >= 0 && rr < len(out.Rows) {
+			repeatSet[rr] = true
+		}
+	}
+	// Assign each non-header output row to a page by accumulating heights.
+	var pageRows [][]int
+	var cur []int
+	curH := 0.0
+	for row := 0; row < len(out.Rows); row++ {
+		if repeatSet[row] {
+			continue
+		}
+		h := out.Rows[row]
+		if curH > 0 && curH+h > printableH && len(cur) > 0 {
+			pageRows = append(pageRows, cur)
+			cur = nil
+			curH = 0
+		}
+		cur = append(cur, row)
+		curH += h
+	}
+	if len(cur) > 0 {
+		pageRows = append(pageRows, cur)
+	}
+	if len(pageRows) == 0 {
+		// Everything is a repeating header; still emit one page for them.
+		pageRows = append(pageRows, nil)
+	}
+	// Build a CPTPage for every body chunk.
+	for pi, body := range pageRows {
+		// Ordered global rows: repeat headers first (ascending), then body.
+		global := make([]int, 0, len(out.RepeatRows)+len(body))
+		global = append(global, out.RepeatRows...)
+		global = append(global, body...)
+		local := make(map[int]int, len(global))
+		rows := make([]float64, 0, len(global))
+		for i, gr := range global {
+			local[gr] = i
+			rows = append(rows, out.Rows[gr])
+		}
+		page := CPTPage{
+			PageNo: pi + 1,
+			Cols:   out.Cols,
+			Rows:   rows,
+			Width:  out.Width,
+		}
+		for _, rh := range rows {
+			page.Height += rh
+		}
+		// Remap cells that intersect this page's row range, clipping spans
+		// that cross a page boundary to the part present on this page.
+		for _, oc := range out.Cells {
+			rs := oc.RS
+			if rs <= 0 {
+				rs = 1
+			}
+			gStart := oc.R
+			gEnd := oc.R + rs // exclusive
+			lmin, lmax := len(local), -1
+			for g := gStart; g < gEnd; g++ {
+				if l, ok := local[g]; ok {
+					if l < lmin {
+						lmin = l
+					}
+					if l > lmax {
+						lmax = l
+					}
+				}
+			}
+			if lmax < 0 {
+				continue
+			}
+			page.Cells = append(page.Cells, OutCell{
+				R:      lmin,
+				C:      oc.C,
+				RS:     lmax - lmin + 1,
+				CS:     oc.CS,
+				Text:   oc.Text,
+				Style:  oc.Style,
+				Chart:  oc.Chart,
+				Widget: oc.Widget,
+			})
+		}
+		out.Pages = append(out.Pages, page)
+	}
 }
 
 // resolveCellCharts fills in charts whose data definition references report
@@ -917,6 +1030,14 @@ func (v *vertRenderer) render() *Sheet {
 		v.emitTemplateRow(row, v.band.cells, v.band.details, nil)
 	}
 	out := &Sheet{Name: v.sh.Name, Cols: append([]float64(nil), v.sh.ColWidths[:v.sh.MaxCol]...), Rows: v.rows}
+	// Header template rows (those above the expansion band) become the first
+	// output rows and repeat on every printed page.
+	if len(above) > 0 {
+		out.RepeatRows = make([]int, len(above))
+		for i := range above {
+			out.RepeatRows[i] = i
+		}
+	}
 	sort.SliceStable(v.cells, func(i, j int) bool {
 		if v.cells[i].R != v.cells[j].R {
 			return v.cells[i].R < v.cells[j].R

@@ -13,6 +13,7 @@
     preview: null,
     path: null,
     page: 0,
+    cptPage: 0,
     fit: true,
     zoom: 1,
     scale: 1,
@@ -44,6 +45,63 @@
     '西北': ['陕西省', '甘肃省', '青海省', '宁夏回族自治区', '新疆维吾尔自治区'],
     '东北': ['辽宁省', '吉林省', '黑龙江省']
   };
+  // Reverse index: province name -> region, so a click on a province maps
+  // back to the region value the dashboard linkage parameter expects.
+  var PROV_TO_REGION = {};
+  Object.keys(CHINA_REGIONS).forEach(function (region) {
+    CHINA_REGIONS[region].forEach(function (p) {
+      PROV_TO_REGION[p] = region;
+    });
+  });
+
+  // FineVis linkage: feed the clicked value into the dashboard parameter and
+  // refresh. Clicking the same value again clears the filter (back to all).
+  function fvsLinkageClick(param, value) {
+    var params = Object.assign({}, state.params);
+    if (params[param] === value) {
+      delete params[param];
+    } else {
+      params[param] = value;
+    }
+    loadPreview(state.path, params);
+  }
+
+  // FineVis "webPage" action: open the target in an in-page overlay with a
+  // close button (the original opens a popup window).
+  function openLinkOverlay(link) {
+    closeLinkOverlay();
+    var ov = document.createElement('div');
+    ov.className = 'fvs-overlay';
+    ov.id = 'fvsLinkOverlay';
+    var panel = document.createElement('div');
+    panel.className = 'fvs-overlay-panel';
+    var bar = document.createElement('div');
+    bar.className = 'fvs-overlay-bar';
+    var title = document.createElement('span');
+    title.textContent = link.name || link.url;
+    var close = document.createElement('button');
+    close.className = 'fvs-overlay-close';
+    close.type = 'button';
+    close.textContent = '✕ 关闭';
+    close.addEventListener('click', closeLinkOverlay);
+    bar.appendChild(title);
+    bar.appendChild(close);
+    var frame = document.createElement('iframe');
+    frame.className = 'fvs-overlay-frame';
+    frame.src = link.url;
+    panel.appendChild(bar);
+    panel.appendChild(frame);
+    ov.appendChild(panel);
+    ov.addEventListener('click', function (e) {
+      if (e.target === ov) closeLinkOverlay();
+    });
+    document.body.appendChild(ov);
+  }
+
+  function closeLinkOverlay() {
+    var ov = document.getElementById('fvsLinkOverlay');
+    if (ov) ov.remove();
+  }
 
   // Loads (once) the offline China GeoJSON shipped with the viewer and
   // registers it with ECharts so area maps render real geometry.
@@ -115,6 +173,7 @@
       'search', 'filters', 'templateList', 'tplCount', 'docTitle', 'docPath',
       'kindBadge', 'paramBar', 'reloadBtn', 'zoomOut', 'zoomIn', 'zoomLabel', 'zoomFit',
       'warnBtn', 'warnCount', 'pageTabs', 'stage', 'emptyState', 'loading', 'previewRoot',
+      'cptPager',
       'warnPanel', 'warnList', 'warnClose', 'toggleSidebar', 'app',
       'connBtn', 'connCount', 'connMask', 'connClose', 'connList', 'connHint',
       'shareBtn', 'exportBtn', 'exportMenu',
@@ -489,6 +548,7 @@
         if (token !== state.reqToken) return;
         state.preview = data;
         state.page = 0;
+        state.cptPage = 0;
         els.emptyState.innerHTML = state.emptyHTML;
         applyMeta(data);
         renderParams(data);
@@ -787,6 +847,7 @@
   function renderPage() {
     disposeCharts();
     els.previewRoot.innerHTML = '';
+    if (els.cptPager) els.cptPager.hidden = true;
     var data = state.preview;
     if (!data) return;
     if (data.kind === 'fvs') {
@@ -805,6 +866,12 @@
     var sheet = (data.sheets || [])[state.page];
     if (!sheet) {
       toast('该报表没有可显示的页面');
+      return;
+    }
+    // Paper pagination: when the template paginates by paper size the sheet
+    // carries one CPTPage per printed page. Render the pager + current page.
+    if (sheet.pages && sheet.pages.length) {
+      renderCPTPages(data, sheet);
       return;
     }
     var colX = prefixSums(sheet.cols || []);
@@ -838,6 +905,98 @@
     if (data.h5) {
       applyH5Mode(data.h5, width);
     }
+  }
+
+  // renderCPTPages paints a FineReport paper-sized page with margins and a
+  // pager. Each printed page is a slice of the sheet that fits the paper
+  // height; header rows repeat on every page.
+  function renderCPTPages(data, sheet) {
+    var pages = sheet.pages;
+    if (state.cptPage >= pages.length) state.cptPage = 0;
+    if (state.cptPage < 0) state.cptPage = pages.length - 1;
+    var page = pages[state.cptPage];
+    var paper = sheet.paper || { width: page.width, height: page.height, marginL: 0, marginR: 0, marginT: 0, marginB: 0 };
+    var pw = paper.width || page.width || 800;
+    var ph = paper.height || page.height || 600;
+    var ml = paper.marginL || 0, mr = paper.marginR || 0, mt = paper.marginT || 0, mb = paper.marginB || 0;
+    state.pageW = pw;
+    state.pageH = ph;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'doc-wrap';
+    var box = document.createElement('div');
+    box.className = 'page-box';
+    var scaleEl = document.createElement('div');
+    scaleEl.className = 'page-scale paper-page';
+    scaleEl.style.width = pw + 'px';
+    scaleEl.style.height = ph + 'px';
+
+    var content = document.createElement('div');
+    content.className = 'paper-content';
+    content.style.left = ml + 'px';
+    content.style.top = mt + 'px';
+    content.style.right = mr + 'px';
+    content.style.bottom = mb + 'px';
+
+    var colX = prefixSums(page.cols || []);
+    var rowY = prefixSums(page.rows || []);
+    content.appendChild(buildSheetBody({ cols: page.cols, rows: page.rows, cells: page.cells }, colX, rowY));
+
+    scaleEl.appendChild(content);
+    box.appendChild(scaleEl);
+    wrap.appendChild(box);
+    els.previewRoot.appendChild(wrap);
+
+    renderCPTPager(sheet, pw, ph);
+  }
+
+  // renderCPTPager builds the split-page control: previous / next, the
+  // current page label, the paper size and a "fit width" toggle.
+  function renderCPTPager(sheet, pw, ph) {
+    var bar = els.cptPager;
+    if (!bar) return;
+    var total = sheet.pages.length;
+    bar.hidden = false;
+    bar.innerHTML = '';
+
+    function btn(label, fn, disabled) {
+      var b = document.createElement('button');
+      b.className = 'cpt-pager-btn';
+      b.textContent = label;
+      b.disabled = !!disabled;
+      b.addEventListener('click', fn);
+      return b;
+    }
+
+    bar.appendChild(btn('‹ 上一页', function () {
+      state.cptPage--;
+      renderPage();
+    }, state.cptPage <= 0));
+
+    var label = document.createElement('span');
+    label.className = 'cpt-pager-label';
+    label.textContent = '第 ' + (state.cptPage + 1) + ' / ' + total + ' 页';
+    bar.appendChild(label);
+
+    bar.appendChild(btn('下一页 ›', function () {
+      state.cptPage++;
+      renderPage();
+    }, state.cptPage >= total - 1));
+
+    var info = document.createElement('span');
+    info.className = 'cpt-pager-info';
+    info.textContent = '纸张 ' + Math.round(pw) + ' × ' + Math.round(ph) + ' px';
+    bar.appendChild(info);
+
+    var fit = document.createElement('button');
+    fit.className = 'cpt-pager-btn';
+    fit.textContent = state.fit ? '适应宽度 ✓' : '适应宽度';
+    fit.addEventListener('click', function () {
+      state.fit = !state.fit;
+      applyZoom();
+      renderCPTPager(sheet, pw, ph);
+    });
+    bar.appendChild(fit);
   }
 
   // applyH5Mode switches the preview into the phone layout. The H5 marker
@@ -1097,6 +1256,10 @@
     switch (w.type) {
       case 'chart':
         el.classList.add('fvs-chart');
+        if (w.clickParam && w.chart) {
+          w.chart.clickParam = w.clickParam;
+          el.classList.add('fvs-clickable');
+        }
         el.appendChild(chartBox(w.chart));
         break;
       case 'workbook':
@@ -1141,6 +1304,13 @@
           text.textContent = w.text || '';
         }
         el.appendChild(text);
+        if (w.link && w.link.url) {
+          el.classList.add('fvs-link');
+          el.style.cursor = 'pointer';
+          el.addEventListener('click', function () {
+            openLinkOverlay(w.link);
+          });
+        }
         break;
       default:
         return null;
@@ -1268,6 +1438,16 @@
       inst.setOption(option, true);
       el.__chart = inst;
       state.charts.push(inst);
+      if (el._spec.clickParam) {
+        // FineVis chart linkage: clicking a pie slice / map region feeds the
+        // clicked value into the named dashboard parameter and refreshes.
+        inst.on('click', function (p) {
+          if (!p) return;
+          var name = p.name || (p.data && p.data.name) || '';
+          if (!name) return;
+          fvsLinkageClick(el._spec.clickParam, PROV_TO_REGION[name] || name);
+        });
+      }
     } catch (err) {
       if (window.console) console.warn('chart init failed', err);
     }
@@ -1800,8 +1980,8 @@
           map: 'china',
           roam: false,
           layoutCenter: ['50%', '52%'],
-          layoutSize: '92%',
-          aspectScale: 0.82,
+          layoutSize: '100%',
+          aspectScale: 0.85,
           label: { show: false },
           itemStyle: {
             areaColor: dark ? 'rgba(96,156,225,0.10)' : '#eef2f8',

@@ -19,12 +19,13 @@ func EmuToPx(v float64) float64 {
 	return v / EmuPerPx
 }
 
-// FontSizePx converts FineReport's 1/10pt font sizes to readable screen pixels.
+// FontSizePx converts FineReport's 1/10pt font sizes to screen pixels at
+// 96dpi (1pt = 4/3px, so a size of 120 → 12pt → 16px).
 func FontSizePx(sizeTenths float64) float64 {
 	if sizeTenths <= 0 {
 		return 0
 	}
-	px := sizeTenths * 0.21333
+	px := sizeTenths * 0.13333
 	if px < 7 {
 		px = 7
 	}
