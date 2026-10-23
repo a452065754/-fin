@@ -10,8 +10,17 @@ type TemplateInfo struct {
 }
 
 type ParamDef struct {
-	Name    string `json:"name"`
-	Default string `json:"default"`
+	Name    string        `json:"name"`
+	Default string        `json:"default"`
+	Label   string        `json:"label,omitempty"`
+	Type    string        `json:"type,omitempty"` // text|combo|date|number|checkbox
+	Options []ParamOption `json:"options,omitempty"`
+}
+
+// ParamOption is one selectable value of a combo/dropdown parameter.
+type ParamOption struct {
+	Value string `json:"value"`
+	Label string `json:"label,omitempty"`
 }
 
 // Preview is the render result sent to the browser.

@@ -639,18 +639,56 @@
       var label = document.createElement('label');
       label.className = 'param-field';
       var name = document.createElement('span');
-      name.textContent = p.name;
-      var input = document.createElement('input');
-      input.type = 'text';
-      input.dataset.param = p.name;
-      input.placeholder = p.default || '';
-      var saved = state.params[p.name];
-      input.value = saved !== undefined && saved !== '' ? saved : (p.default || '');
-      input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') applyParams();
-      });
+      name.textContent = p.label || p.name;
       label.appendChild(name);
-      label.appendChild(input);
+
+      var saved = state.params[p.name];
+      var cur = saved !== undefined && saved !== '' ? saved : (p.default || '');
+      var control;
+
+      if (p.type === 'combo' && p.options && p.options.length) {
+        control = document.createElement('select');
+        control.dataset.param = p.name;
+        p.options.forEach(function (opt) {
+          var o = document.createElement('option');
+          o.value = opt.value;
+          o.textContent = (opt.label || opt.value);
+          if (opt.value === cur) o.selected = true;
+          control.appendChild(o);
+        });
+        if (cur === '' && p.options.length) {
+          var blank = document.createElement('option');
+          blank.value = '';
+          blank.textContent = '（全部）';
+          control.insertBefore(blank, control.firstChild);
+        }
+      } else if (p.type === 'date') {
+        control = document.createElement('input');
+        control.type = 'date';
+        control.dataset.param = p.name;
+        control.value = cur;
+      } else if (p.type === 'checkbox') {
+        control = document.createElement('input');
+        control.type = 'checkbox';
+        control.dataset.param = p.name;
+        control.checked = cur === 'true' || cur === '1' || cur === '是';
+      } else if (p.type === 'number') {
+        control = document.createElement('input');
+        control.type = 'number';
+        control.dataset.param = p.name;
+        control.value = cur;
+        control.placeholder = p.default || '';
+      } else {
+        control = document.createElement('input');
+        control.type = 'text';
+        control.dataset.param = p.name;
+        control.placeholder = p.default || '';
+        control.value = cur;
+        control.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') applyParams();
+        });
+      }
+      label.appendChild(control);
       els.paramBar.appendChild(label);
     });
 
@@ -787,8 +825,15 @@
   function applyParams() {
     if (!state.path) return;
     var params = {};
-    Array.prototype.forEach.call(els.paramBar.querySelectorAll('input[data-param]'), function (input) {
-      params[input.dataset.param] = input.value;
+    Array.prototype.forEach.call(els.paramBar.querySelectorAll('[data-param]'), function (el) {
+      var key = el.dataset.param;
+      if (el.tagName === 'SELECT') {
+        params[key] = el.value;
+      } else if (el.type === 'checkbox') {
+        params[key] = el.checked ? 'true' : 'false';
+      } else {
+        params[key] = el.value;
+      }
     });
     rememberParams(state.path, params);
     loadPreview(state.path, params);
@@ -1460,6 +1505,19 @@
       var inst = window.echarts.init(el, null, { renderer: 'canvas' });
       inst.setOption(option, true);
       el.__chart = inst;
+      // The chart box may still be settling its final size (table layout,
+      // fonts, zoom) after init, so the canvas can be initialised wider than
+      // the container and get clipped by overflow:hidden. A ResizeObserver
+      // keeps the canvas in sync with the box on every layout change.
+      try {
+        if (window.ResizeObserver) {
+          var ro = new ResizeObserver(function () {
+            try { inst.resize(); } catch (e) { /* ignore */ }
+          });
+          ro.observe(el);
+          el.__ro = ro;
+        }
+      } catch (e) { /* ignore */ }
       state.charts.push(inst);
       if (el._spec.clickParam) {
         // FineVis chart linkage: clicking a pie slice / map region feeds the
@@ -1480,6 +1538,13 @@
     state.charts.forEach(function (inst) {
       try { inst.dispose(); } catch (e) { /* ignore */ }
     });
+    // Detach every ResizeObserver we attached so the boxes don't keep the
+    // chart instances alive after a navigation.
+    if (state.previewRoot) {
+      Array.prototype.forEach.call(state.previewRoot.querySelectorAll('.chart-box'), function (el) {
+        if (el.__ro) { try { el.__ro.disconnect(); } catch (e) { /* ignore */ } el.__ro = null; }
+      });
+    }
     state.charts = [];
   }
 

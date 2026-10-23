@@ -169,6 +169,7 @@ func ParseCPTBytes(data []byte, name, path string) (*CPTTemplate, error) {
 func parseTemplateParams(root *XNode) []ParamDef {
 	var out []ParamDef
 	if rpa := root.Child("ReportParameterAttr"); rpa != nil {
+		widgets := parseParamWidgets(rpa)
 		for _, p := range rpa.ChildAll("Parameter") {
 			name := p.Attr("name")
 			if a := p.Child("Attributes"); a != nil {
@@ -181,10 +182,127 @@ func parseTemplateParams(root *XNode) []ParamDef {
 			if o := p.Child("O"); o != nil {
 				def = strings.TrimSpace(o.TextTrim())
 			}
-			out = append(out, ParamDef{Name: name, Default: def})
+			pd := ParamDef{Name: name, Default: def}
+			if w, ok := widgets[name]; ok {
+				pd.Type = w.Type
+				pd.Options = w.Options
+				if w.Label != "" {
+					pd.Label = w.Label
+				}
+			}
+			if pd.Type == "" {
+				pd.Type = "text"
+			}
+			out = append(out, pd)
 		}
 	}
 	return out
+}
+
+// paramWidget captures the UI control bound to a template parameter so the
+// viewer can render a real filter control (dropdown, date picker, …) instead
+// of a bare text box.
+type paramWidget struct {
+	Type    string
+	Label   string
+	Options []ParamOption
+}
+
+// parseParamWidgets walks the parameter-panel layout and returns, keyed by
+// parameter name, the control type and any dropdown options. FineReport
+// stores the panel as a full form whose widgets carry both the parameter
+// name (WidgetName) and the editor class (InnerWidget).
+func parseParamWidgets(rpa *XNode) map[string]paramWidget {
+	out := map[string]paramWidget{}
+	ui := rpa.Child("ParameterUI")
+	if ui == nil {
+		return out
+	}
+	layout := ui.Child("Layout")
+	if layout == nil {
+		return out
+	}
+	for _, w := range layout.ChildAll("Widget") {
+		iw := w.Child("InnerWidget")
+		if iw == nil {
+			continue
+		}
+		var name string
+		if wn := iw.Child("WidgetName"); wn != nil {
+			name = wn.Attr("name")
+		}
+		if name == "" {
+			continue
+		}
+		cls := iw.Attr("class")
+		pw := out[name]
+		pw.Type = widgetTypeOf(cls)
+		pw.Options = paramComboOptions(iw)
+		// A label widget placed just before the control often carries the
+		// human-readable caption; capture it when available.
+		if lbl := paramWidgetLabel(w); lbl != "" {
+			pw.Label = lbl
+		}
+		out[name] = pw
+	}
+	return out
+}
+
+// widgetTypeOf maps a FineReport editor class to the viewer control kind.
+func widgetTypeOf(cls string) string {
+	switch {
+	case strings.Contains(cls, "ComboBox"), strings.Contains(cls, "ComboCheckBox"),
+		strings.Contains(cls, "TreeComboBox"):
+		return "combo"
+	case strings.Contains(cls, "DateEditor"), strings.Contains(cls, "DateTimeEditor"):
+		return "date"
+	case strings.Contains(cls, "NumberEditor"):
+		return "number"
+	case strings.Contains(cls, "CheckBox"), strings.Contains(cls, "Radio"):
+		return "checkbox"
+	default:
+		return "text"
+	}
+}
+
+// paramComboOptions extracts the selectable values from a combo's dictionary.
+// Only the static CustomDictionary form is decoded here; a TableDataDictionary
+// would require running another dataset query, which the parser does not do.
+func paramComboOptions(iw *XNode) []ParamOption {
+	dict := iw.Child("Dictionary")
+	if dict == nil {
+		return nil
+	}
+	// The dictionary kind is carried by the class attribute; the option list
+	// itself lives under <CustomDictAttr> for a custom dictionary.
+	attr := dict.Child("CustomDictAttr")
+	if attr == nil {
+		return nil
+	}
+	var opts []ParamOption
+	for _, d := range attr.ChildAll("Dict") {
+		k := d.Attr("key")
+		v := d.Attr("value")
+		if k == "" && v == "" {
+			continue
+		}
+		if v == "" {
+			v = k
+		}
+		opts = append(opts, ParamOption{Value: k, Label: v})
+	}
+	return opts
+}
+
+func paramWidgetLabel(w *XNode) string {
+	// The label is sometimes a sibling Label widget; we only read an inline
+	// caption from the control's own WidgetTitle when present.
+	if t := w.Child("WidgetTitle"); t != nil {
+		if o := t.Child("O"); o != nil {
+			return strings.TrimSpace(o.TextTrim())
+		}
+	}
+	return ""
 }
 
 func (sh *SheetTemplate) parseSizes(rep, root *XNode) {

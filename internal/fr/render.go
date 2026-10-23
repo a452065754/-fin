@@ -34,8 +34,32 @@ type renderState struct {
 }
 
 // Render expands the template with dataset data and request parameters.
+// allParams returns the parameters to surface in the viewer's parameter
+// panel. FineReport reports declare parameters either at the template level
+// (ReportParameterAttr) or on individual datasets (<Parameters>); a report
+// that filters through a dataset parameter still needs a UI to change it,
+// so both sources are merged by name (template-level wins on conflict).
+func (t *CPTTemplate) allParams() []ParamDef {
+	seen := map[string]bool{}
+	out := make([]ParamDef, 0, len(t.Params))
+	for _, pd := range t.Params {
+		out = append(out, pd)
+		seen[pd.Name] = true
+	}
+	for _, ds := range t.Datasets {
+		for _, pd := range ds.Params {
+			if seen[pd.Name] {
+				continue
+			}
+			out = append(out, pd)
+			seen[pd.Name] = true
+		}
+	}
+	return out
+}
+
 func (t *CPTTemplate) Render(dr *DataResolver, params map[string]string) *Preview {
-	p := &Preview{Path: t.Path, Name: t.Name, Kind: "cpt", Title: t.Name, Params: t.Params}
+	p := &Preview{Path: t.Path, Name: t.Name, Kind: "cpt", Title: t.Name, Params: t.allParams()}
 	st := newRenderState(t, dr, params)
 	st.loadDatasets()
 	// Sheets are rendered up front so that cross-sheet references such as
@@ -73,6 +97,20 @@ func newRenderState(tpl *CPTTemplate, dr *DataResolver, params map[string]string
 			v = nv
 		}
 		st.paramVal[pd.Name] = v
+	}
+	// Dataset-level parameters also act as value sources for ${name} in cell
+	// formulas, so seed their defaults too (template-level already won).
+	for _, ds := range tpl.Datasets {
+		for _, pd := range ds.Params {
+			if _, ok := st.paramVal[pd.Name]; ok {
+				continue
+			}
+			v := pd.Default
+			if nv, ok := lookupParam(params, pd.Name); ok && nv != "" {
+				v = nv
+			}
+			st.paramVal[pd.Name] = v
+		}
 	}
 	for k, v := range params {
 		if _, ok := st.paramVal[k]; !ok {
