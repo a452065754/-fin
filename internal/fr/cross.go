@@ -395,7 +395,7 @@ func (x *crossRenderer) resolveBandPending() {
 			if col == x.hCol && x.vRows[row] {
 				btc := x.sh.Cells[[2]int{row, x.hCol}]
 				if btc == nil {
-					return nil, false
+					return nil, true
 				}
 				var arr []any
 				for gi := range x.groups {
@@ -589,7 +589,7 @@ func (x *crossRenderer) evalCross(ct *CellTemplate, gi int) any {
 		if x.vRows[row] && row == ct.R {
 			tc := x.sh.Cells[[2]int{row, col}]
 			if tc == nil {
-				return nil, false
+				return nil, true
 			}
 			if tc.C == x.hCol && (tc.Kind == "ds" || tc.Kind == "formula") {
 				return x.crossArray(tc, gi), true
@@ -743,6 +743,8 @@ func (x *crossRenderer) condHolds(cond string, gi, j int, hv any) bool {
 }
 
 // refRaw looks up an already emitted output value by template coordinates.
+// A syntactically valid reference that carries no value is an empty cell and
+// resolves to (nil, true); only an unresolvable reference returns false.
 func (x *crossRenderer) refRaw(row, col int) (any, bool) {
 	base := x.mapRow(row)
 	// A reference to a vertically expanding row returns the array of all
@@ -758,7 +760,7 @@ func (x *crossRenderer) refRaw(row, col int) (any, bool) {
 		if len(arr) > 0 {
 			return arr, true
 		}
-		return nil, false
+		return nil, true
 	}
 	if col == x.hCol && x.vRows[row] {
 		var arr []any
@@ -772,12 +774,12 @@ func (x *crossRenderer) refRaw(row, col int) (any, bool) {
 		if len(arr) > 0 {
 			return arr, true
 		}
-		return nil, false
+		return nil, true
 	}
 	if v, ok := x.rawByOut[[2]int{base, x.mapCol(col)}]; ok {
 		return v, true
 	}
-	return nil, false
+	return nil, true
 }
 
 func (x *crossRenderer) indexOf(ct *CellTemplate) int {

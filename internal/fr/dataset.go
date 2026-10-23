@@ -504,7 +504,35 @@ func (ds *Dataset) ColumnIndex(name string) int {
 			return i
 		}
 	}
+	// FineReport qualifies dataset columns with an MDX-style hierarchy such as
+	// "[Measures].[短期意外险保费]" or "[Hierarchy].[Level]". The stored column
+	// name is only the innermost segment, so strip the bracket qualifiers from
+	// both sides and retry before giving up.
+	if q := stripColumnQualifier(name); q != "" && q != name {
+		for i, c := range ds.Columns {
+			if strings.EqualFold(c, q) || strings.EqualFold(stripColumnQualifier(c), q) {
+				return i
+			}
+		}
+	}
 	return -1
+}
+
+// stripColumnQualifier reduces an MDX-style column reference to its innermost
+// segment: "[Measures].[短期意外险保费]" -> "短期意外险保费". A name without
+// brackets is returned unchanged.
+func stripColumnQualifier(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || !strings.Contains(s, "[") {
+		return s
+	}
+	// Take the text inside the last [...] group.
+	open := strings.LastIndex(s, "[")
+	close := strings.Index(s[open:], "]")
+	if close <= 1 {
+		return s
+	}
+	return strings.TrimSpace(s[open+1 : open+close])
 }
 
 // ExpandSQL replaces ${...} placeholders in a dataset query. A bare parameter

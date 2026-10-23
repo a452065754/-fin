@@ -1332,14 +1332,14 @@ func (v *vertRenderer) bandCellRaw(ct *CellTemplate, d int) any {
 			if !ok {
 				return nil, false
 			}
-			if row == v.band.row {
-				tc := cellAtCol(v.band.cells, col)
-				if tc == nil {
-					return nil, false
-				}
-				return v.bandCellRaw(tc, d), true
+		if row == v.band.row {
+			tc := cellAtCol(v.band.cells, col)
+			if tc == nil {
+				return nil, true
 			}
-			return v.outRef(row, col)
+			return v.bandCellRaw(tc, d), true
+		}
+		return v.outRef(row, col)
 		}, func(a, b string) (any, bool) {
 			return v.bandRange(a, b, []int{d})
 		}, d+1)
@@ -1357,7 +1357,8 @@ func (v *vertRenderer) outRef(row, col int) (any, bool) {
 	if val, ok := v.rawByOut[key]; ok {
 		return val, true
 	}
-	return nil, false
+	// A valid reference with no rendered value is an empty cell, not an error.
+	return nil, true
 }
 
 func (v *vertRenderer) lastOutRowFor(templateRow int) int {
@@ -1450,14 +1451,15 @@ func (v *vertRenderer) staticRaw(ct *CellTemplate, scope []int) any {
 					return vals, true
 				}
 			}
-			// Look up an already rendered cell (same summary row first).
-			for i := len(v.rows) - 1; i >= 0; i-- {
-				if val, ok := v.rawByOut[[2]int{i, col}]; ok && row < v.band.row {
-					return val, true
-				}
+		// Look up an already rendered cell (same summary row first).
+		for i := len(v.rows) - 1; i >= 0; i-- {
+			if val, ok := v.rawByOut[[2]int{i, col}]; ok && row < v.band.row {
+				return val, true
 			}
-			return nil, false
-		}, func(a, b string) (any, bool) {
+		}
+		// A valid reference with no rendered value is an empty cell.
+		return nil, true
+	}, func(a, b string) (any, bool) {
 			return v.bandRange(a, b, scope)
 		}, 0)
 	case "ds":
@@ -1640,7 +1642,7 @@ func (h *horizRenderer) dynRaw(ct *CellTemplate, i int) any {
 			if tc := h.sh.Cells[[2]int{row, col}]; tc != nil {
 				return h.staticRaw(tc), true
 			}
-			return nil, false
+			return nil, true
 		}, func(a, b string) (any, bool) {
 			return h.rangeVals(a, b)
 		}, i+1)
@@ -1687,7 +1689,7 @@ func (h *horizRenderer) staticRaw(ct *CellTemplate) any {
 			if tc := h.sh.Cells[[2]int{row, col}]; tc != nil {
 				return h.staticRaw(tc), true
 			}
-			return nil, false
+			return nil, true
 		}, func(a, b string) (any, bool) {
 			return h.rangeVals(a, b)
 		}, 0)

@@ -474,25 +474,24 @@ func applyBinary(op string, a, b any) (any, error) {
 	case "&":
 		return stringOf(a) + stringOf(b), nil
 	case "+":
-		if _, aStr := a.(string); aStr {
-			if _, ok := toFloat(a); !ok {
+		if s, ok := a.(string); ok && strings.TrimSpace(s) != "" {
+			if _, isNum := toFloat(a); !isNum {
 				return stringOf(a) + stringOf(b), nil
 			}
 		}
-		if _, bStr := b.(string); bStr {
-			if _, ok := toFloat(b); !ok {
+		if s, ok := b.(string); ok && strings.TrimSpace(s) != "" {
+			if _, isNum := toFloat(b); !isNum {
 				return stringOf(a) + stringOf(b), nil
 			}
 		}
-		fa, oka := toFloat(a)
-		fb, okb := toFloat(b)
-		if !oka || !okb {
-			return nil, fmt.Errorf("%v + %v 不是数值", a, b)
-		}
+		// Empty cells count as zero (FineReport/Excel semantics), so a sum of
+		// blanks yields 0 rather than #ERROR.
+		fa, _ := numOrZero(a)
+		fb, _ := numOrZero(b)
 		return fa + fb, nil
 	case "-", "*", "/", "%", "^":
-		fa, oka := toFloat(a)
-		fb, okb := toFloat(b)
+		fa, oka := numOrZero(a)
+		fb, okb := numOrZero(b)
 		if !oka || !okb {
 			return nil, fmt.Errorf("运算符 %s 需要数值", op)
 		}
@@ -502,13 +501,15 @@ func applyBinary(op string, a, b any) (any, error) {
 		case "*":
 			return fa * fb, nil
 		case "/":
+			// An empty or zero divisor yields a blank cell: FineReport shows
+			// an undefined ratio as empty rather than #ERROR.
 			if fb == 0 {
-				return nil, fmt.Errorf("除数不能为 0")
+				return nil, nil
 			}
 			return fa / fb, nil
 		case "%":
 			if fb == 0 {
-				return nil, fmt.Errorf("除数不能为 0")
+				return nil, nil
 			}
 			return math.Mod(fa, fb), nil
 		case "^":
@@ -516,8 +517,8 @@ func applyBinary(op string, a, b any) (any, error) {
 		}
 	case "=", "==", "<>", "!=", "<", ">", "<=", ">=":
 		cmp := 0
-		fa, oka := toFloat(a)
-		fb, okb := toFloat(b)
+		fa, oka := numOrZero(a)
+		fb, okb := numOrZero(b)
 		if oka && okb {
 			switch {
 			case fa < fb:
@@ -761,6 +762,18 @@ func (e callExpr) eval(ctx *EvalContext) (any, error) {
 		if len(vals) < 1 {
 			return nil, fmt.Errorf("LEN 缺少参数")
 		}
+		// A band/expansion reference arrives as an array; LEN counts the
+		// elements that actually carry a value, so an all-empty band reads
+		// as length 0 and empty-guards such as if(len(S4)=0,0,T4/S4) hold.
+		if arr, ok := vals[0].([]any); ok {
+			n := 0
+			for _, e := range arr {
+				if !isEmptyOperand(e) {
+					n++
+				}
+			}
+			return float64(n), nil
+		}
 		return float64(len([]rune(stringOf(vals[0])))), nil
 	case "TRIM":
 		if len(vals) < 1 {
@@ -789,18 +802,27 @@ func (e callExpr) eval(ctx *EvalContext) (any, error) {
 				fields, isDataset = ctx.DatasetFields(name)
 			}
 			if isDataset {
-				resolve := func(spec any) (int, error) {
-					switch t := spec.(type) {
-					case string:
+			resolve := func(spec any) (int, error) {
+				switch t := spec.(type) {
+				case string:
+					for i, c := range fields {
+						if strings.EqualFold(c, t) {
+							return i, nil
+						}
+					}
+					// Retry with FineReport's MDX qualifier stripped, e.g.
+					// "[Measures].[短期意外险保费]" -> "短期意外险保费".
+					if q := stripColumnQualifier(t); q != "" && q != t {
 						for i, c := range fields {
-							if strings.EqualFold(c, t) {
+							if strings.EqualFold(c, q) || strings.EqualFold(stripColumnQualifier(c), q) {
 								return i, nil
 							}
 						}
-						if n, err := strconv.Atoi(strings.TrimSpace(t)); err == nil && n >= 1 && n <= len(fields) {
-							return n - 1, nil
-						}
-						return -1, fmt.Errorf("数据集 %s 中找不到列 %s", name, t)
+					}
+					if n, err := strconv.Atoi(strings.TrimSpace(t)); err == nil && n >= 1 && n <= len(fields) {
+						return n - 1, nil
+					}
+					return -1, fmt.Errorf("数据集 %s 中找不到列 %s", name, t)
 					default:
 						n, ok := toFloat(spec)
 						if !ok || n < 1 || n > float64(len(fields)) {
@@ -1719,8 +1741,44 @@ func stringOf(v any) string {
 	return plainValue(v)
 }
 
+// isEmptyOperand reports whether a value is an empty cell: nil or a blank
+// string. FineReport treats these as "no value" rather than zero.
+func isEmptyOperand(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(t) == ""
+	}
+	return false
+}
+
+// numOrZero coerces an empty operand to 0, matching FineReport/Excel where an
+// empty cell participates in arithmetic and numeric comparison as zero. A
+// non-empty, non-numeric value still reports not-a-number so genuine type
+// errors keep surfacing.
+func numOrZero(v any) (float64, bool) {
+	switch t := v.(type) {
+	case nil:
+		return 0, true
+	case string:
+		if strings.TrimSpace(t) == "" {
+			return 0, true
+		}
+	}
+	return toFloat(v)
+}
+
 func toFloat(v any) (float64, bool) {
 	switch t := v.(type) {
+	case []any:
+		// FineReport frequently wraps a single value in a one-element array
+		// (a band/expansion reference). Unwrap it so arithmetic and numeric
+		// comparisons treat it as the scalar it represents.
+		if len(t) == 1 {
+			return toFloat(t[0])
+		}
+		return 0, false
 	case float64:
 		return t, true
 	case float32:

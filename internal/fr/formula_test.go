@@ -151,8 +151,8 @@ func TestFormulaLogicFunctions(t *testing.T) {
 }
 
 func TestFormulaIfError(t *testing.T) {
-	// The first argument fails, so the fallback is used.
-	if v := evalOK(t, "IFERROR(1/0, 99)", nil); v != float64(99) {
+	// The first argument fails (non-numeric operand), so the fallback is used.
+	if v := evalOK(t, "IFERROR(\"abc\" - 1, 99)", nil); v != float64(99) {
 		t.Errorf("IFERROR fallback = %#v", v)
 	}
 	// A successful first argument passes straight through.
@@ -167,13 +167,21 @@ func TestFormulaIfError(t *testing.T) {
 	}
 }
 
-func TestFormulaDivisionByZeroErrors(t *testing.T) {
-	_, err := EvalFormula("1/0", NewEvalContext())
-	if err == nil {
-		t.Fatal("expected division by zero to fail")
+func TestFormulaDivisionByZeroBlank(t *testing.T) {
+	// Division by an empty or zero divisor yields a blank cell, matching
+	// FineReport, not a #DIV/0 error.
+	if v := evalOK(t, "1/0", nil); v != nil {
+		t.Errorf("1/0 = %#v, want blank", v)
 	}
-	if !strings.Contains(err.Error(), "除数") {
-		t.Errorf("unexpected error: %v", err)
+	ctx := NewEvalContext()
+	ctx.Ref = func(ref string) (any, bool) {
+		if ref == "A1" {
+			return nil, true // empty cell
+		}
+		return 0.0, true
+	}
+	if v := evalOK(t, "A1/B1", ctx); v != nil {
+		t.Errorf("A1/B1 = %#v, want blank", v)
 	}
 }
 
