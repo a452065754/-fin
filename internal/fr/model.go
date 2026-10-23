@@ -88,6 +88,11 @@ type OutCell struct {
 	// Bias carries the two labels of a cross-table corner header
 	// (BiasTextPainter, e.g. "销售员|地区") rendered split by a diagonal.
 	Bias   []string   `json:"bias,omitempty"`
+	// NoDir marks a band cell emitted per detail row that FineReport actually
+	// renders as one cell spanning the whole vertical expansion (<Expand/>
+	// with no dir). The vertical renderer merges the duplicates. Transient:
+	// never serialised.
+	NoDir  bool       `json:"-"`
 	Style  Style      `json:"style,omitempty"`
 	Chart  *ChartSpec `json:"chart,omitempty"`
 	// Widget is set when the cell carries a fill-in control.

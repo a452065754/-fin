@@ -355,6 +355,22 @@ func javaDateLayout(p string) string {
 }
 
 func formatNumber(f float64, pattern string) string {
+	// A multi-section format "positive;negative;zero" selects the section by
+	// sign. The negative section carries its own sign (parentheses or a
+	// literal minus), so the automatic "-" prefix must be suppressed for it.
+	signInPattern := false
+	if strings.Contains(pattern, ";") {
+		secs := strings.Split(pattern, ";")
+		switch {
+		case f < 0 && len(secs) >= 2 && strings.TrimSpace(secs[1]) != "":
+			pattern = secs[1]
+			signInPattern = true
+		case f == 0 && len(secs) >= 3 && strings.TrimSpace(secs[2]) != "":
+			pattern = secs[2]
+		default:
+			pattern = secs[0]
+		}
+	}
 	neg := f < 0
 	af := math.Abs(f)
 	pct := strings.Contains(pattern, "%")
@@ -423,7 +439,7 @@ func formatNumber(f float64, pattern string) string {
 	} else {
 		out = strconv.FormatFloat(af, 'f', decimals, 64)
 	}
-	if neg {
+	if neg && !signInPattern {
 		out = "-" + out
 	}
 	return prefix + out + suffix

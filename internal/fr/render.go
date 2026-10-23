@@ -1128,12 +1128,62 @@ func (v *vertRenderer) render() *Sheet {
 		}
 		return v.cells[i].C < v.cells[j].C
 	})
-	out.Cells = v.cells
+	out.Cells = mergeNoDirSpans(v.cells)
 	for _, w := range out.Cols {
 		out.Width += w
 	}
 	for _, h := range out.Rows {
 		out.Height += h
+	}
+	return out
+}
+
+// mergeNoDirSpans collapses the per-detail-row duplicates of band cells that
+// FineReport renders as a single cell spanning the whole vertical expansion
+// (<Expand/> with no dir, e.g. a summary formula like =B2-E2 or a spacer).
+// emitDetail paints one copy per row; here consecutive same-column copies are
+// merged into one cell whose row-span covers the run.
+func mergeNoDirSpans(cells []OutCell) []OutCell {
+	byCol := map[int][]int{}
+	for i, c := range cells {
+		if c.NoDir {
+			byCol[c.C] = append(byCol[c.C], i)
+		}
+	}
+	if len(byCol) == 0 {
+		return cells
+	}
+	drop := map[int]bool{}
+	for _, idxs := range byCol {
+		var run []int
+		flush := func() {
+			if len(run) > 1 {
+				first, last := cells[run[0]], cells[run[len(run)-1]]
+				cells[run[0]].RS = last.R - first.R + 1
+				for _, k := range run[1:] {
+					drop[k] = true
+				}
+			}
+			run = nil
+		}
+		for _, idx := range idxs {
+			if len(run) > 0 && cells[idx].R == cells[run[len(run)-1]].R+1 {
+				run = append(run, idx)
+			} else {
+				flush()
+				run = []int{idx}
+			}
+		}
+		flush()
+	}
+	if len(drop) == 0 {
+		return cells
+	}
+	out := make([]OutCell, 0, len(cells)-len(drop))
+	for i, c := range cells {
+		if !drop[i] {
+			out = append(out, c)
+		}
 	}
 	return out
 }
@@ -1296,7 +1346,7 @@ func (v *vertRenderer) emitDetail(d int) {
 			continue
 		}
 		raw := v.bandCellRaw(ct, d)
-		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
+		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct), NoDir: ct.HasExpand && ct.ExpandDir < 0}
 		if ct.Kind == "chart" {
 			oc.Chart = v.r.chartFor(ct)
 		} else {
