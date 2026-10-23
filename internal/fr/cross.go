@@ -97,6 +97,9 @@ func (r *renderState) renderCross(sh *SheetTemplate) *Sheet {
 	for _, w := range out.Cols {
 		out.Width += w
 	}
+	for _, h := range out.Rows {
+		out.Height += h
+	}
 	return out
 }
 

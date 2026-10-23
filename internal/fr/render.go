@@ -155,16 +155,23 @@ func (r *renderState) renderSheet(sh *SheetTemplate) *Sheet {
 	return out
 }
 
-// paginate slices a rendered sheet into printed pages that fit the paper
-// height. Header rows (RepeatRows) repeat on every page. It only acts when
-// the sheet is configured to paginate by paper ("paper" mode) and the paper
-// height is known; otherwise the sheet stays a single continuous page.
+// paginate slices a rendered sheet into printed pages that fit the paper. The
+// sheet is cut both vertically (by printable height) and horizontally (by
+// printable width); each printed page is one row band crossed with one column
+// band. Header rows (RepeatRows) and left-fixed columns (RepeatCols) repeat on
+// every page. It only acts when the sheet is configured to paginate by paper
+// ("paper" mode) and the paper size is known; otherwise the sheet stays a
+// single continuous page (no Pages are produced).
 func (r *renderState) paginate(sh *SheetTemplate, out *Sheet) {
 	if sh.Paging != "paper" || sh.PaperH <= 0 {
 		return
 	}
 	printableH := sh.PaperH - sh.MarginT - sh.MarginB
-	if printableH <= 0 || len(out.Rows) == 0 {
+	printableW := sh.PaperW - sh.MarginL - sh.MarginR
+	// Bail out only when neither axis can paginate.
+	rowAxisOK := printableH > 0 && len(out.Rows) > 0
+	colAxisOK := printableW > 0 && len(out.Cols) > 0
+	if !rowAxisOK && !colAxisOK {
 		return
 	}
 	out.Paper = &PaperInfo{
@@ -176,93 +183,169 @@ func (r *renderState) paginate(sh *SheetTemplate, out *Sheet) {
 		MarginB: sh.MarginB,
 		Mode:    "paper",
 	}
-	repeatSet := map[int]bool{}
-	for _, rr := range out.RepeatRows {
-		if rr >= 0 && rr < len(out.Rows) {
-			repeatSet[rr] = true
+	repeatRowSet := indexSet(out.RepeatRows, len(out.Rows))
+	repeatColSet := indexSet(out.RepeatCols, len(out.Cols))
+	rowBands := splitAxis(out.Rows, repeatRowSet, printableH)
+	colBands := splitAxis(out.Cols, repeatColSet, printableW)
+	// Pages are emitted in reading order: each row band crossed with each
+	// column band. The frontend walks this flat list top-to-bottom, left-to-
+	// right, so 行带×列带 pages appear as "第 X / N 页".
+	pageNo := 0
+	for _, rowBand := range rowBands {
+		for _, colBand := range colBands {
+			pageNo++
+			out.Pages = append(out.Pages, buildCPTPage(out, rowBand, colBand, pageNo))
 		}
 	}
-	// Assign each non-header output row to a page by accumulating heights.
-	var pageRows [][]int
-	var cur []int
-	curH := 0.0
-	for row := 0; row < len(out.Rows); row++ {
-		if repeatSet[row] {
+}
+
+// indexSet builds a lookup set of the indices in idxs clamped to [0,n). It is
+// used to recognise repeating header rows / fixed columns during pagination.
+func indexSet(idxs []int, n int) map[int]bool {
+	m := make(map[int]bool, len(idxs))
+	for _, i := range idxs {
+		if i >= 0 && i < n {
+			m[i] = true
+		}
+	}
+	return m
+}
+
+// splitAxis divides one axis of the rendered grid into page-sized bands and
+// returns the ordered global indices that make up each band. When limit<=0 the
+// axis does not constrain the page, so the whole axis is a single band.
+// Repeating header indices (RepeatRows/RepeatCols) are kept out of the size
+// budget and prepended to every band, but only when the axis actually splits;
+// a single band already contains every index in natural order.
+func splitAxis(sizes []float64, repeat map[int]bool, limit float64) [][]int {
+	n := len(sizes)
+	if n == 0 {
+		return [][]int{nil}
+	}
+	var body []int
+	var repeatIdx []int
+	for i := 0; i < n; i++ {
+		if repeat[i] {
+			repeatIdx = append(repeatIdx, i)
+		} else {
+			body = append(body, i)
+		}
+	}
+	// Accumulate the body into size-bounded bands.
+	var bodyBands [][]int
+	if limit <= 0 {
+		bodyBands = [][]int{body}
+	} else {
+		var cur []int
+		curSize := 0.0
+		for _, i := range body {
+			s := sizes[i]
+			if curSize > 0 && curSize+s > limit && len(cur) > 0 {
+				bodyBands = append(bodyBands, cur)
+				cur = nil
+				curSize = 0
+			}
+			cur = append(cur, i)
+			curSize += s
+		}
+		if len(cur) > 0 {
+			bodyBands = append(bodyBands, cur)
+		}
+	}
+	if len(bodyBands) <= 1 {
+		// No split: the single band is every index in natural order.
+		all := make([]int, 0, n)
+		for i := 0; i < n; i++ {
+			all = append(all, i)
+		}
+		return [][]int{all}
+	}
+	bands := make([][]int, 0, len(bodyBands))
+	for _, b := range bodyBands {
+		band := make([]int, 0, len(repeatIdx)+len(b))
+		band = append(band, repeatIdx...)
+		band = append(band, b...)
+		bands = append(bands, band)
+	}
+	return bands
+}
+
+// buildCPTPage assembles one printed page from the row and column bands it
+// covers. Cell row/column spans that cross a page boundary are clipped to the
+// part present on this page, and the surviving cells are remapped to page-
+// local indices so the frontend can position them against the page's own grid.
+func buildCPTPage(out *Sheet, rowBand, colBand []int, pageNo int) CPTPage {
+	rowLocal := make(map[int]int, len(rowBand))
+	rows := make([]float64, 0, len(rowBand))
+	for i, gr := range rowBand {
+		rowLocal[gr] = i
+		rows = append(rows, out.Rows[gr])
+	}
+	colLocal := make(map[int]int, len(colBand))
+	cols := make([]float64, 0, len(colBand))
+	for i, gc := range colBand {
+		colLocal[gc] = i
+		cols = append(cols, out.Cols[gc])
+	}
+	page := CPTPage{
+		PageNo: pageNo,
+		Cols:   cols,
+		Rows:   rows,
+	}
+	for _, w := range cols {
+		page.Width += w
+	}
+	for _, h := range rows {
+		page.Height += h
+	}
+	for _, oc := range out.Cells {
+		rs := oc.RS
+		if rs <= 0 {
+			rs = 1
+		}
+		cs := oc.CS
+		if cs <= 0 {
+			cs = 1
+		}
+		rmin, rmax := spanIntersect(oc.R, rs, rowLocal)
+		if rmax < 0 {
 			continue
 		}
-		h := out.Rows[row]
-		if curH > 0 && curH+h > printableH && len(cur) > 0 {
-			pageRows = append(pageRows, cur)
-			cur = nil
-			curH = 0
+		cmin, cmax := spanIntersect(oc.C, cs, colLocal)
+		if cmax < 0 {
+			continue
 		}
-		cur = append(cur, row)
-		curH += h
+		page.Cells = append(page.Cells, OutCell{
+			R:      rmin,
+			C:      cmin,
+			RS:     rmax - rmin + 1,
+			CS:     cmax - cmin + 1,
+			Text:   oc.Text,
+			Style:  oc.Style,
+			Chart:  oc.Chart,
+			Widget: oc.Widget,
+		})
 	}
-	if len(cur) > 0 {
-		pageRows = append(pageRows, cur)
-	}
-	if len(pageRows) == 0 {
-		// Everything is a repeating header; still emit one page for them.
-		pageRows = append(pageRows, nil)
-	}
-	// Build a CPTPage for every body chunk.
-	for pi, body := range pageRows {
-		// Ordered global rows: repeat headers first (ascending), then body.
-		global := make([]int, 0, len(out.RepeatRows)+len(body))
-		global = append(global, out.RepeatRows...)
-		global = append(global, body...)
-		local := make(map[int]int, len(global))
-		rows := make([]float64, 0, len(global))
-		for i, gr := range global {
-			local[gr] = i
-			rows = append(rows, out.Rows[gr])
-		}
-		page := CPTPage{
-			PageNo: pi + 1,
-			Cols:   out.Cols,
-			Rows:   rows,
-			Width:  out.Width,
-		}
-		for _, rh := range rows {
-			page.Height += rh
-		}
-		// Remap cells that intersect this page's row range, clipping spans
-		// that cross a page boundary to the part present on this page.
-		for _, oc := range out.Cells {
-			rs := oc.RS
-			if rs <= 0 {
-				rs = 1
+	return page
+}
+
+// spanIntersect reports the page-local index range a global span
+// [start, start+span) covers within one page's index map. It returns
+// (minLocal, maxLocal); maxLocal is negative when the span does not touch the
+// page at all.
+func spanIntersect(start, span int, local map[int]int) (int, int) {
+	lmin, lmax := len(local), -1
+	for g := start; g < start+span; g++ {
+		if l, ok := local[g]; ok {
+			if l < lmin {
+				lmin = l
 			}
-			gStart := oc.R
-			gEnd := oc.R + rs // exclusive
-			lmin, lmax := len(local), -1
-			for g := gStart; g < gEnd; g++ {
-				if l, ok := local[g]; ok {
-					if l < lmin {
-						lmin = l
-					}
-					if l > lmax {
-						lmax = l
-					}
-				}
+			if l > lmax {
+				lmax = l
 			}
-			if lmax < 0 {
-				continue
-			}
-			page.Cells = append(page.Cells, OutCell{
-				R:      lmin,
-				C:      oc.C,
-				RS:     lmax - lmin + 1,
-				CS:     oc.CS,
-				Text:   oc.Text,
-				Style:  oc.Style,
-				Chart:  oc.Chart,
-				Widget: oc.Widget,
-			})
 		}
-		out.Pages = append(out.Pages, page)
 	}
+	return lmin, lmax
 }
 
 // resolveCellCharts fills in charts whose data definition references report

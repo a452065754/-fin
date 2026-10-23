@@ -50,6 +50,10 @@ type Sheet struct {
 	// RepeatRows lists output row indices that are page headers and repeat on
 	// every printed page. Internal; not serialised to the browser.
 	RepeatRows []int `json:"-"`
+	// RepeatCols lists output column indices (left-fixed columns) that repeat
+	// on every printed page when the sheet paginates horizontally. It is empty
+	// for templates that declare no repeat columns. Internal; not serialised.
+	RepeatCols []int `json:"-"`
 }
 
 // PaperInfo describes the report paper used for pagination. All sizes are in

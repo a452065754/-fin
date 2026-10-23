@@ -134,7 +134,7 @@ func ParseCPTBytes(data []byte, name, path string) (*CPTTemplate, error) {
 		if sh.Name == "" {
 			sh.Name = fmt.Sprintf("sheet%d", len(t.Sheets)+1)
 		}
-		sh.parseSizes(rep)
+		sh.parseSizes(rep, root)
 		for _, c := range cel.ChildAll("C") {
 			ct := parseCell(c, t.Styles)
 			if ct == nil {
@@ -187,7 +187,7 @@ func parseTemplateParams(root *XNode) []ParamDef {
 	return out
 }
 
-func (sh *SheetTemplate) parseSizes(rep *XNode) {
+func (sh *SheetTemplate) parseSizes(rep, root *XNode) {
 	sh.DefRow = EmuToPx(723900)
 	sh.DefCol = EmuToPx(2743200)
 	if rh := rep.Child("RowHeight"); rh != nil {
@@ -204,6 +204,23 @@ func (sh *SheetTemplate) parseSizes(rep *XNode) {
 		}
 		sh.ColWidths = parseEmuList(cw.Text)
 	}
+	// WebPage isPage decides whether the web preview paginates by paper. When
+	// isPage="false" the report shows as one continuous HTML page, so an empty
+	// PaperSetting must stay unpaginated (e.g. GettingStarted.cpt). A missing
+	// WebPage element means the FineReport default, which is to paginate.
+	// ReportWebAttr lives at the WorkBook level (a sibling of Report) and the
+	// WebPage element is nested inside its WebPageContent, so both are located
+	// with a recursive search.
+	isPage := true
+	if rwa := root.Child("ReportWebAttr"); rwa != nil {
+		if wp := rwa.Find("WebPage"); wp != nil {
+			isPage = wp.AttrBool("isPage", true)
+		}
+	} else if rwa := rep.Child("ReportWebAttr"); rwa != nil {
+		if wp := rwa.Find("WebPage"); wp != nil {
+			isPage = wp.AttrBool("isPage", true)
+		}
+	}
 	if attr := rep.Child("ReportAttrSet"); attr != nil {
 		if rs := attr.Child("ReportSettings"); rs != nil {
 			if ps := rs.Child("PaperSetting"); ps != nil {
@@ -218,14 +235,24 @@ func (sh *SheetTemplate) parseSizes(rep *XNode) {
 					sh.MarginB = EmuToPx(m.AttrFloat("bottom", 0))
 				}
 			}
+			// FineReport treats an empty PaperSetting as A4 for a paginated
+			// preview. Default to A4 at 96dpi (794x1123px) so paper
+			// pagination can apply; a template that opts out of web paging
+			// (WebPage isPage="false") keeps no paper and renders as one
+			// continuous page.
+			if sh.PaperW <= 0 && isPage {
+				sh.PaperW = 794
+				sh.PaperH = 1123
+			}
 			sh.Paging = detectPagingMode(rs, sh.PaperW)
 		}
 	}
 }
 
-// detectPagingMode reads FineReport's paging setting. When the report has a
-// paper size we default to "paper" (paginate by paper) unless the template
-// explicitly turns vertical paging off.
+// detectPagingMode reads FineReport's paging setting. parseSizes has already
+// substituted A4 (794x1123px) for an empty PaperSetting when the template
+// paginates on the web, so a positive paperW here means "paginate by paper"
+// unless the template explicitly turns vertical paging off.
 func detectPagingMode(rs *XNode, paperW float64) string {
 	if !rs.AttrBool("VerticallyPaging", true) {
 		return "none"

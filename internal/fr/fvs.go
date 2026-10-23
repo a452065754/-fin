@@ -730,7 +730,7 @@ func parseECSheet(data []byte, name string, datasets map[string]*Dataset) (*Shee
 	}
 	styles := ParseStyleList(root)
 	sh := &SheetTemplate{Name: name, Cells: map[[2]int]*CellTemplate{}}
-	sh.parseSizes(fec)
+	sh.parseSizes(fec, root)
 	if cel := fec.Child("CellElementList"); cel != nil {
 		for _, c := range cel.ChildAll("C") {
 			ct := parseCell(c, styles)
