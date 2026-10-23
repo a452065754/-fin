@@ -3,6 +3,7 @@ package fr
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -144,6 +145,11 @@ func normalizeCellRef(text string) string {
 // resolve reads the referenced cell values through the given lookup function.
 // It returns the category labels, the per-series names and the per-series
 // values.
+//
+// FineReport cell-chart bindings come in two shapes:
+//   - a single value cell + a single category cell (one point), and
+//   - an L-shaped matrix where a header row and a header column bracket a
+//     rectangular value block. The latter must be expanded to the full grid.
 func (src *chartCellSource) resolve(lookup func(string) (any, bool)) ([]string, []string, [][]any, error) {
 	if src == nil {
 		return nil, nil, nil, fmt.Errorf("没有可解析的单元格引用")
@@ -164,6 +170,16 @@ func (src *chartCellSource) resolve(lookup func(string) (any, bool)) ([]string, 
 		return []string{fmt.Sprintf("%v", v)}, nil, [][]any{{v}}, nil
 	}
 
+	// L-shaped matrix binding: one SeriesDefinition together with a Category
+	// header. FineReport expands the header anchors to the whole data region,
+	// recovering the grouped bar/column chart instead of a single point.
+	if len(src.seriesValues) == 1 && src.category != "" {
+		if cats, names, series, err := src.resolveMatrix(read); err == nil && len(series) > 0 {
+			return cats, names, series, nil
+		}
+	}
+
+	// Legacy single-point handling: one plotted value per series definition.
 	var cats []string
 	var names []string
 	var series [][]any
@@ -202,4 +218,131 @@ func (src *chartCellSource) resolve(lookup func(string) (any, bool)) ([]string, 
 		}
 	}
 	return cats, names, series, nil
+}
+
+// resolveMatrix expands an L-shaped cell-chart binding. FineReport writes a
+// single SeriesDefinition whose SeriesName and SeriesValue point at the header
+// cells bracketing a value block, and a Category anchor on the other axis. We
+// walk each header axis until the first empty cell to recover the full grid.
+func (src *chartCellSource) resolveMatrix(read func(string) (any, bool)) ([]string, []string, [][]any, error) {
+	nameRef := src.seriesNames[0]
+	valRef := src.seriesValues[0]
+	catRef := src.category
+
+	nc, nr, okN := CellRefParts(nameRef)
+	vc, vr, okV := CellRefParts(valRef)
+	_, _, okC := CellRefParts(catRef)
+	if !(okN && okV && okC) {
+		return nil, nil, nil, fmt.Errorf("单元格引用无法解析")
+	}
+
+	// The two header axes are orthogonal: one runs horizontally (right), the
+	// other vertically (down), meeting at the value corner. Detect which is
+	// which from the L-shape relative to the value cell.
+	seriesDown := false
+	switch {
+	case nc == vc:
+		seriesDown = false // name shares the value's column -> horizontal header
+	case nr == vr:
+		seriesDown = true // name shares the value's row -> vertical header
+	default:
+		return nil, nil, nil, fmt.Errorf("系列方向与数值单元格不成 L 形")
+	}
+	catDown := !seriesDown
+
+	seriesRefs := src.expandAxis(nameRef, seriesDown, read)
+	catRefs := src.expandAxis(catRef, catDown, read)
+	if len(seriesRefs) == 0 || len(catRefs) == 0 {
+		return nil, nil, nil, fmt.Errorf("图表坐标轴扩展为空")
+	}
+
+	seriesNames := make([]string, len(seriesRefs))
+	for j, sref := range seriesRefs {
+		if nv, ok := read(sref); ok {
+			if s := strings.TrimSpace(fmt.Sprintf("%v", nv)); s != "" {
+				seriesNames[j] = s
+				continue
+			}
+		}
+		seriesNames[j] = sref
+	}
+	catNames := make([]string, len(catRefs))
+	for i, cref := range catRefs {
+		if cv, ok := read(cref); ok {
+			catNames[i] = fmt.Sprintf("%v", cv)
+		} else {
+			catNames[i] = cref
+		}
+	}
+
+	// series[j].data[i] = value at the block cell for (series j, category i).
+	series := make([][]any, len(seriesRefs))
+	for j := range seriesRefs {
+		vals := make([]any, len(catRefs))
+		for i := range catRefs {
+			var col, row int
+			if seriesDown {
+				col, row = vc+i, vr+j
+			} else {
+				col, row = vc+j, vr+i
+			}
+			if v, ok := read(cellRefFromParts(col, row)); ok {
+				vals[i] = v
+			}
+		}
+		series[j] = vals
+	}
+	return catNames, seriesNames, series, nil
+}
+
+// expandAxis walks from anchor in the given direction collecting every
+// non-empty cell reference until the first empty one. The anchor is included.
+// This mirrors FineReport's cell-chart binding, where a single header cell such
+// as =C3 marks the start of an entire axis.
+func (src *chartCellSource) expandAxis(anchor string, down bool, read func(string) (any, bool)) []string {
+	col, row, ok := CellRefParts(anchor)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for i := 0; i < 256; i++ {
+		ref := cellRefFromParts(col, row)
+		v, ok := read(ref)
+		if !ok || isEmptyCell(v) {
+			break
+		}
+		out = append(out, ref)
+		if down {
+			row++
+		} else {
+			col++
+		}
+	}
+	return out
+}
+
+// isEmptyCell reports whether a resolved cell value should stop an axis walk.
+func isEmptyCell(v any) bool {
+	if v == nil {
+		return true
+	}
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s) == ""
+	}
+	return false
+}
+
+// cellRefFromParts rebuilds an A1 reference from 0-based column/row parts.
+func cellRefFromParts(col, row int) string {
+	if col < 0 || row < 0 {
+		return ""
+	}
+	var letters []byte
+	c := col + 1
+	for c > 0 {
+		c--
+		letters = append([]byte{byte('A' + c%26)}, letters...)
+		c /= 26
+	}
+	return string(letters) + strconv.Itoa(row+1)
 }

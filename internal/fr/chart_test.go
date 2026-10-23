@@ -42,6 +42,41 @@ func kindsOf(charts []*ChartSpec) string {
 	return strings.Join(b, ",")
 }
 
+// A cell-data chart bound through an L-shaped header block (series name row,
+// category column, value block corner) must expand to the full matrix instead
+// of a single point. GettingStarted.cpt 的柱形图正是这种绑定。
+func TestChartCellMatrix(t *testing.T) {
+	c := firstChartOfKind(t, "GettingStarted.cpt", "bar")
+	if len(c.Categories) < 2 {
+		t.Fatalf("柱形图分类不足，期望多个分类，实际 %d: %v", len(c.Categories), c.Categories)
+	}
+	if len(c.Series) < 2 {
+		t.Fatalf("柱形图系列不足，期望多个系列，实际 %d", len(c.Series))
+	}
+	hasCat := false
+	for _, cat := range c.Categories {
+		if cat == "孙林" {
+			hasCat = true
+		}
+	}
+	if !hasCat {
+		t.Errorf("分类缺少 孙林，实际 %v", c.Categories)
+	}
+	hasSer := false
+	for _, s := range c.Series {
+		if s.Name == "苹果汁" {
+			hasSer = true
+		}
+	}
+	if !hasSer {
+		var names []string
+		for _, s := range c.Series {
+			names = append(names, s.Name)
+		}
+		t.Errorf("系列缺少 苹果汁，实际 %v", names)
+	}
+}
+
 // A bubble chart must be typed as a bubble and carry a radius per point.
 func TestChartBubble(t *testing.T) {
 	c := firstChartOfKind(t, "demo/chart/DataVisualization/数据可视化.cpt", "bubble")
