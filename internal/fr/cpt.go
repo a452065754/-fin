@@ -300,6 +300,23 @@ func (sh *SheetTemplate) fillSizes() {
 	}
 }
 
+// biasLabels splits a cross-table corner header ("销售员|地区") into its two
+// diagonal labels. Returns nil for any other cell kind.
+func biasLabels(ct *CellTemplate) []string {
+	if ct == nil || ct.Kind != "biastext" {
+		return nil
+	}
+	parts := strings.SplitN(ct.Text, "|", 2)
+	out := make([]string, 0, 2)
+	for _, p := range parts {
+		out = append(out, strings.TrimSpace(p))
+	}
+	if len(out) == 2 && (out[0] != "" || out[1] != "") {
+		return out
+	}
+	return nil
+}
+
 func parseCell(c *XNode, styles []Style) *CellTemplate {
 	ct := &CellTemplate{
 		R:         c.AttrInt("r", 0),
@@ -360,6 +377,10 @@ func parseCell(c *XNode, styles []Style) *CellTemplate {
 			} else {
 				ct.Formula = strings.TrimSpace(o.TextTrim())
 			}
+		case "BiasTextPainter":
+			// Cross-table corner header: "销售员|地区" split by a diagonal.
+			ct.Kind = "biastext"
+			ct.Text = strings.TrimSpace(o.TextTrim())
 		case "CC":
 			ct.Kind = "chart"
 			ct.ChartXML = o.Child("Chart")

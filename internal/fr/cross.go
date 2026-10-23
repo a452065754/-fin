@@ -333,13 +333,13 @@ func (x *crossRenderer) emitStaticRow(outRow int, rowCells []*CellTemplate) {
 				}
 				continue
 			}
-			oc := OutCell{R: outRow, C: x.mapCol(ct.C), RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
+			oc := OutCell{R: outRow, C: x.mapCol(ct.C), RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
 			x.cells = append(x.cells, oc)
 			x.pending = append(x.pending, crossPending{ct: ct, outRow: outRow, outCol: x.mapCol(ct.C), idx: len(x.cells) - 1})
 			continue
 		}
 		if ct.Kind == "chart" {
-			oc := OutCell{R: outRow, C: x.mapCol(ct.C), RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Chart: x.r.chartFor(ct)}
+			oc := OutCell{R: outRow, C: x.mapCol(ct.C), RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct), Chart: x.r.chartFor(ct)}
 			x.cells = append(x.cells, oc)
 			continue
 		}
@@ -495,7 +495,7 @@ func aggregateFunc(fnClass string, vals []any) any {
 }
 
 func (x *crossRenderer) emitMapped(ct *CellTemplate, outRow int, raw any) {
-	oc := OutCell{R: outRow, C: x.mapCol(ct.C), RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
+	oc := OutCell{R: outRow, C: x.mapCol(ct.C), RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
 	if ct.Kind == "chart" {
 		oc.Chart = x.r.chartFor(ct)
 	} else {
@@ -513,7 +513,7 @@ func (x *crossRenderer) staticRaw(ct *CellTemplate) any {
 			return x.r.dsValue(ct, 0)
 		}
 		return nil
-	case "text", "blank":
+	case "text", "blank", "biastext":
 		return x.r.substitute(ct.Text)
 	default:
 		return ""
@@ -545,7 +545,7 @@ func (x *crossRenderer) bodyRaw(ct *CellTemplate, gi int) any {
 		return nil
 	case "formula":
 		return x.evalCross(ct, gi)
-	case "text", "blank":
+	case "text", "blank", "biastext":
 		return x.r.substitute(ct.Text)
 	default:
 		return ""

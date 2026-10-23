@@ -838,6 +838,44 @@ svg {
   display: block;
 }
 
+/* ---- 交叉表斜角表头（BiasTextPainter，如 销售员|地区） ---- */
+
+.cell-bias {
+  display: block;
+  padding: 0;
+}
+
+.bias-diag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.bias-diag line {
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.bias-label {
+  position: absolute;
+  white-space: nowrap;
+  line-height: 1.1;
+}
+
+.bias-label.bias-tr {
+  top: 3px;
+  right: 5px;
+}
+
+.bias-label.bias-bl {
+  bottom: 3px;
+  left: 5px;
+}
+
 /* ---- 填报控件（Fill-in controls） ---- */
 
 .cell-widget {

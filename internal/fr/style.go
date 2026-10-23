@@ -1,6 +1,8 @@
 package fr
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"strconv"
@@ -173,9 +175,18 @@ func ParseStyleNode(n *XNode) Style {
 		case strings.Contains(name, "Color"):
 			if c := bg.Child("color"); c != nil {
 				s.Background = colorOfNode(c)
+			} else if col := bg.Attr("color"); col != "" {
+				// Solid colour carried as an attribute, e.g.
+				// <Background name="ColorBackground" color="-13312"/>.
+				if v, err := strconv.ParseInt(col, 10, 64); err == nil {
+					s.Background = FRColor(v)
+				}
 			}
 		case strings.Contains(name, "Image"):
-			s.Background = "" // image backgrounds are handled by FVS/background layers
+			if uri, size := decodeImageBackground(bg); uri != "" {
+				s.BackgroundImage = uri
+				s.BackgroundSize = size
+			}
 		}
 	}
 	if b := n.Child("Border"); b != nil {
@@ -188,6 +199,47 @@ func ParseStyleNode(n *XNode) Style {
 		s.NumberFormat = f.TextTrim()
 	}
 	return s
+}
+
+// decodeImageBackground decodes a FineReport <Background name="ImageBackground">
+// into a PNG data URI so the viewer can paint the cell background. The image
+// bytes use the same Ascii85 + raw-DEFLATE scheme as embedded datasets, with a
+// short FineImage header preceding the PNG signature.
+func decodeImageBackground(bg *XNode) (uri, size string) {
+	im := bg.Find("IM")
+	if im == nil {
+		return "", ""
+	}
+	raw, err := DecodeFineString(im.Text)
+	if len(raw) == 0 {
+		return "", ""
+	}
+	_ = err // a truncated image is rare; keep whatever decoded.
+	// Locate the PNG signature; FR prefixes the image with a small header.
+	if i := bytes.Index(raw, []byte("\x89PNG")); i >= 0 {
+		raw = raw[i:]
+	} else if i := bytes.Index(raw, []byte("GIF8")); i >= 0 {
+		raw = raw[i:]
+	} else if i := bytes.Index(raw, []byte("\xff\xd8\xff")); i >= 0 {
+		raw = raw[i:]
+	}
+	if len(raw) == 0 {
+		return "", ""
+	}
+	mime := "image/png"
+	if bytes.HasPrefix(raw, []byte("GIF8")) {
+		mime = "image/gif"
+	} else if bytes.HasPrefix(raw, []byte("\xff\xd8\xff")) {
+		mime = "image/jpeg"
+	}
+	uri = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw)
+	// layout 0 tiles; anything else stretches the strip to fill the cell.
+	if bg.Attr("layout") == "0" {
+		size = "auto"
+	} else {
+		size = "100% 100%"
+	}
+	return uri, size
 }
 
 // ParseStyleList parses the workbook-level <StyleList>.

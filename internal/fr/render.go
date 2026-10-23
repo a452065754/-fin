@@ -321,6 +321,7 @@ func buildCPTPage(out *Sheet, rowBand, colBand []int, pageNo int) CPTPage {
 			RS:     rmax - rmin + 1,
 			CS:     cmax - cmin + 1,
 			Text:   oc.Text,
+			Bias:   oc.Bias,
 			Style:  oc.Style,
 			Chart:  oc.Chart,
 			Widget: oc.Widget,
@@ -819,7 +820,7 @@ func (r *renderState) renderStatic(sh *SheetTemplate) *Sheet {
 	out := &Sheet{Name: sh.Name, Cols: append([]float64(nil), sh.ColWidths[:sh.MaxCol]...), Rows: append([]float64(nil), sh.RowHeights[:sh.MaxRow]...)}
 	for _, ct := range sh.CellList {
 		raw := ev.raw(ct)
-		oc := OutCell{R: ct.R, C: ct.C, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
+		oc := OutCell{R: ct.R, C: ct.C, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
 		if ct.Kind == "chart" {
 			oc.Chart = r.chartFor(ct)
 		} else {
@@ -858,7 +859,7 @@ func (e *staticEval) raw(ct *CellTemplate) any {
 	defer delete(e.busy, key)
 	var raw any
 	switch ct.Kind {
-	case "text", "blank":
+	case "text", "blank", "biastext":
 		raw = e.r.substitute(ct.Text)
 	case "ds":
 		raw = e.r.dsValue(ct, 0)
@@ -1229,7 +1230,7 @@ func (v *vertRenderer) emitGroupCell(col int, rows []int, start, end int) {
 	if len(rows) > 0 {
 		raw = v.r.dsValue(ct, rows[0])
 	}
-	oc := OutCell{R: start, C: ct.C, RS: end - start, CS: ct.CS, Style: ct.Style, Text: v.r.display(ct, raw), Widget: ct.Widget}
+	oc := OutCell{R: start, C: ct.C, RS: end - start, CS: ct.CS, Style: ct.Style, Text: v.r.display(ct, raw), Widget: ct.Widget, Bias: biasLabels(ct)}
 	v.cells = append(v.cells, oc)
 	if len(rows) > 0 {
 		v.rawByOut[[2]int{start, col}] = v.r.dsValue(ct, rows[0])
@@ -1276,7 +1277,7 @@ func (v *vertRenderer) emitSummaryDetail(part []int) {
 		} else {
 			raw = v.bandCellRaw(ct, d)
 		}
-		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
+		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
 		if ct.Kind == "chart" {
 			oc.Chart = v.r.chartFor(ct)
 		} else {
@@ -1295,7 +1296,7 @@ func (v *vertRenderer) emitDetail(d int) {
 			continue
 		}
 		raw := v.bandCellRaw(ct, d)
-		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
+		oc := OutCell{R: outRow, C: ct.C, RS: 1, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
 		if ct.Kind == "chart" {
 			oc.Chart = v.r.chartFor(ct)
 		} else {
@@ -1343,7 +1344,7 @@ func (v *vertRenderer) bandCellRaw(ct *CellTemplate, d int) any {
 		}, func(a, b string) (any, bool) {
 			return v.bandRange(a, b, []int{d})
 		}, d+1)
-	case "text", "blank":
+	case "text", "blank", "biastext":
 		raw = v.r.substitute(ct.Text)
 	default:
 		raw = ""
@@ -1415,7 +1416,7 @@ func (v *vertRenderer) emitTemplateRow(trow int, bandCells []*CellTemplate, scop
 			continue
 		}
 		raw := v.staticRaw(ct, scope)
-		oc := OutCell{R: outRow, C: ct.C, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
+		oc := OutCell{R: outRow, C: ct.C, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
 		if ct.Kind == "chart" {
 			oc.Chart = v.r.chartFor(ct)
 		} else {
@@ -1428,7 +1429,7 @@ func (v *vertRenderer) emitTemplateRow(trow int, bandCells []*CellTemplate, scop
 
 func (v *vertRenderer) staticRaw(ct *CellTemplate, scope []int) any {
 	switch ct.Kind {
-	case "text", "blank":
+	case "text", "blank", "biastext":
 		return v.r.substitute(ct.Text)
 	case "formula":
 		if scope == nil {
@@ -1561,7 +1562,7 @@ func (h *horizRenderer) render() *Sheet {
 				for i := 0; i < h.items; i++ {
 					raw := h.dynRaw(ct, i)
 					outC := h.bandCol + i
-					oc := OutCell{R: row, C: outC, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget}
+					oc := OutCell{R: row, C: outC, RS: ct.RS, CS: ct.CS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
 					if ct.Kind == "chart" {
 						oc.Chart = h.r.chartFor(ct)
 					} else {
@@ -1574,7 +1575,7 @@ func (h *horizRenderer) render() *Sheet {
 			}
 			outC, outCS := h.mapCol(ct.C, ct.CS)
 			raw := h.staticRaw(ct)
-			oc := OutCell{R: row, C: outC, RS: ct.RS, CS: outCS, Style: ct.Style, Widget: ct.Widget}
+			oc := OutCell{R: row, C: outC, RS: ct.RS, CS: outCS, Style: ct.Style, Widget: ct.Widget, Bias: biasLabels(ct)}
 			if ct.Kind == "chart" {
 				oc.Chart = h.r.chartFor(ct)
 			} else {
@@ -1646,7 +1647,7 @@ func (h *horizRenderer) dynRaw(ct *CellTemplate, i int) any {
 		}, func(a, b string) (any, bool) {
 			return h.rangeVals(a, b)
 		}, i+1)
-	case "text", "blank":
+	case "text", "blank", "biastext":
 		raw = h.r.substitute(ct.Text)
 	default:
 		raw = ""
@@ -1667,7 +1668,7 @@ func (h *horizRenderer) staticRaw(ct *CellTemplate) any {
 	defer delete(h.staticBusy, key)
 	var raw any
 	switch ct.Kind {
-	case "text", "blank":
+	case "text", "blank", "biastext":
 		raw = h.r.substitute(ct.Text)
 	case "formula":
 		raw = h.r.evalFormula(ct, func(ref string) (any, bool) {

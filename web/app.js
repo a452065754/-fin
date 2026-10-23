@@ -1102,6 +1102,23 @@
       if (cell.chart) {
         el.classList.add('cell-chart');
         el.appendChild(chartBox(cell.chart));
+      } else if (cell.bias && cell.bias.length) {
+        el.classList.add('cell-bias');
+        var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'bias-diag');
+        svg.setAttribute('preserveAspectRatio', 'none');
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', '0'); line.setAttribute('y1', '100%');
+        line.setAttribute('x2', '100%'); line.setAttribute('y2', '0');
+        line.setAttribute('vector-effect', 'non-scaling-stroke');
+        svg.appendChild(line);
+        el.appendChild(svg);
+        cell.bias.forEach(function (label, i) {
+          var s = document.createElement('span');
+          s.className = 'bias-label ' + (i === 0 ? 'bias-tr' : 'bias-bl');
+          s.textContent = label;
+          el.appendChild(s);
+        });
       } else if (cell.widget) {
         el.classList.add('cell-widget');
         el.appendChild(buildFormControl(cell));
@@ -1229,6 +1246,12 @@
     if (s.underline) el.style.textDecoration = 'underline';
     if (s.color) el.style.color = s.color;
     if (s.background) el.style.backgroundColor = s.background;
+    if (s.backgroundImage) {
+      el.style.backgroundImage = 'url("' + s.backgroundImage.replace(/"/g, '%22') + '")';
+      el.style.backgroundSize = s.backgroundSize || '100% 100%';
+      el.style.backgroundPosition = 'center center';
+      el.style.backgroundRepeat = (s.backgroundSize === 'auto') ? 'repeat' : 'no-repeat';
+    }
     if (s.hAlign) {
       el.style.textAlign = s.hAlign === 'justify' ? 'justify' : s.hAlign;
     }
