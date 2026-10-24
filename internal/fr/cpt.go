@@ -170,6 +170,7 @@ func parseTemplateParams(root *XNode) []ParamDef {
 	var out []ParamDef
 	if rpa := root.Child("ReportParameterAttr"); rpa != nil {
 		widgets := parseParamWidgets(rpa)
+		seen := map[string]bool{}
 		for _, p := range rpa.ChildAll("Parameter") {
 			name := p.Attr("name")
 			if a := p.Child("Attributes"); a != nil {
@@ -189,11 +190,32 @@ func parseTemplateParams(root *XNode) []ParamDef {
 				if w.Label != "" {
 					pd.Label = w.Label
 				}
+				if w.Dict != nil {
+					pd.Dict = w.Dict
+				}
 			}
 			if pd.Type == "" {
 				pd.Type = "text"
 			}
 			out = append(out, pd)
+			seen[name] = true
+		}
+		// Some templates declare the parameter only through a parameter-panel
+		// widget (the <Parameters/> list is empty). Surface those controls as
+		// parameters too so the viewer can render a real dropdown/date/etc.
+		for name, w := range widgets {
+			if seen[name] || w.Type == "" {
+				continue
+			}
+			pd := ParamDef{Name: name, Type: w.Type, Default: w.Default}
+			if w.Label != "" {
+				pd.Label = w.Label
+			}
+			if w.Dict != nil {
+				pd.Dict = w.Dict
+			}
+			out = append(out, pd)
+			seen[name] = true
 		}
 	}
 	return out
@@ -205,7 +227,11 @@ func parseTemplateParams(root *XNode) []ParamDef {
 type paramWidget struct {
 	Type    string
 	Label   string
+	Default string
 	Options []ParamOption
+	// Dict is set when the control's options come from a database dictionary
+	// (DatabaseDictionary) and must be resolved at render time.
+	Dict *DictSpec
 }
 
 // parseParamWidgets walks the parameter-panel layout and returns, keyed by
@@ -237,7 +263,23 @@ func parseParamWidgets(rpa *XNode) map[string]paramWidget {
 		cls := iw.Attr("class")
 		pw := out[name]
 		pw.Type = widgetTypeOf(cls)
+		// A control that is not a parameter editor (button, label, …) is
+		// skipped; widgetTypeOf returns "" for those.
+		if pw.Type == "" {
+			continue
+		}
 		pw.Options = paramComboOptions(iw)
+		// Capture the control's own default value (e.g. <widgetValue><O>华东</O>).
+		if wv := iw.Child("widgetValue"); wv != nil {
+			if o := wv.Child("O"); o != nil {
+				pw.Default = strings.TrimSpace(o.TextTrim())
+			}
+		}
+		// A database dictionary cannot be decoded statically; remember it so
+		// the renderer can resolve the options at runtime.
+		if d := paramComboDict(iw); d != nil {
+			pw.Dict = d
+		}
 		// A label widget placed just before the control often carries the
 		// human-readable caption; capture it when available.
 		if lbl := paramWidgetLabel(w); lbl != "" {
@@ -260,6 +302,9 @@ func widgetTypeOf(cls string) string {
 		return "number"
 	case strings.Contains(cls, "CheckBox"), strings.Contains(cls, "Radio"):
 		return "checkbox"
+	case strings.Contains(cls, "FormSubmitButton"), strings.Contains(cls, "Button"),
+		strings.Contains(cls, "Label"), strings.Contains(cls, "FreeButton"):
+		return ""
 	default:
 		return "text"
 	}
@@ -292,6 +337,38 @@ func paramComboOptions(iw *XNode) []ParamOption {
 		opts = append(opts, ParamOption{Value: k, Label: v})
 	}
 	return opts
+}
+
+// paramComboDict extracts a database dictionary spec from a combo's
+// <Dictionary class="...DatabaseDictionary"> so the renderer can resolve
+// the selectable options at runtime.
+func paramComboDict(iw *XNode) *DictSpec {
+	dict := iw.Child("Dictionary")
+	if dict == nil {
+		return nil
+	}
+	if !strings.Contains(dict.Attr("class"), "DatabaseDictionary") {
+		return nil
+	}
+	db := dict.Child("DBDictAttr")
+	if db == nil {
+		return nil
+	}
+	table := strings.TrimSpace(db.Attr("tableName"))
+	if table == "" {
+		return nil
+	}
+	ki, _ := strconv.Atoi(db.Attr("ki"))
+	vi, _ := strconv.Atoi(db.Attr("vi"))
+	conn := "FRDemo"
+	if c := dict.Child("Connection"); c != nil {
+		if dn := c.Child("DatabaseName"); dn != nil {
+			if v := strings.TrimSpace(dn.TextTrim()); v != "" {
+				conn = v
+			}
+		}
+	}
+	return &DictSpec{Conn: conn, Table: table, KI: ki, VI: vi}
 }
 
 func paramWidgetLabel(w *XNode) string {

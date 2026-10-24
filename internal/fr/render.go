@@ -58,10 +58,38 @@ func (t *CPTTemplate) allParams() []ParamDef {
 	return out
 }
 
+// resolveParamDicts fills combo options that come from a database
+// dictionary. The dictionaries are resolved lazily through the
+// DataResolver, which opens the connection on demand.
+func resolveParamDicts(dr *DataResolver, params []ParamDef) {
+	if dr == nil {
+		return
+	}
+	for i := range params {
+		pd := &params[i]
+		if pd.Dict == nil {
+			continue
+		}
+		kv, err := dr.Dictionary(pd.Dict.Conn, pd.Dict.Table, pd.Dict.KI, pd.Dict.VI)
+		if err != nil || len(kv) == 0 {
+			continue
+		}
+		opts := make([]ParamOption, 0, len(kv))
+		for k, v := range kv {
+			opts = append(opts, ParamOption{Value: k, Label: v})
+		}
+		sort.Slice(opts, func(a, b int) bool { return opts[a].Label < opts[b].Label })
+		pd.Options = opts
+	}
+}
+
 func (t *CPTTemplate) Render(dr *DataResolver, params map[string]string) *Preview {
 	p := &Preview{Path: t.Path, Name: t.Name, Kind: "cpt", Title: t.Name, Params: t.allParams()}
 	st := newRenderState(t, dr, params)
 	st.loadDatasets()
+	// Combo parameters backed by a database dictionary have no static option
+	// list; resolve the selectable values now that the datasets are loaded.
+	resolveParamDicts(dr, p.Params)
 	// Sheets are rendered up front so that cross-sheet references such as
 	// '2010-实际'!N5 can read the referenced sheet's cells.
 	sheets := make([]Sheet, len(t.Sheets))

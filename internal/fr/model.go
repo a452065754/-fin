@@ -15,6 +15,10 @@ type ParamDef struct {
 	Label   string        `json:"label,omitempty"`
 	Type    string        `json:"type,omitempty"` // text|combo|date|number|checkbox
 	Options []ParamOption `json:"options,omitempty"`
+	// Dict carries a database-backed dictionary (DatabaseDictionary) whose
+	// options are resolved at render time via the DataResolver. It is not
+	// serialized: the resolved Options above are what the browser receives.
+	Dict *DictSpec `json:"-"`
 }
 
 // ParamOption is one selectable value of a combo/dropdown parameter.

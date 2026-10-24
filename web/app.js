@@ -659,7 +659,7 @@
         if (cur === '' && p.options.length) {
           var blank = document.createElement('option');
           blank.value = '';
-          blank.textContent = '（全部）';
+          blank.textContent = '（不选）';
           control.insertBefore(blank, control.firstChild);
         }
       } else if (p.type === 'date') {
