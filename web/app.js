@@ -57,6 +57,10 @@
 
   // FineVis linkage: feed the clicked value into the dashboard parameter and
   // refresh. Clicking the same value again clears the filter (back to all).
+  // FineVis linkage: clicking a chart slice/region feeds a dashboard
+  // parameter. FineReport updates only the affected widgets in place; a full
+  // loadPreview hides the stage and rebuilds the DOM, which makes the screen
+  // flash and resets the page fit plus the map's pan/zoom.
   function fvsLinkageClick(param, value) {
     var params = Object.assign({}, state.params);
     if (params[param] === value) {
@@ -64,7 +68,81 @@
     } else {
       params[param] = value;
     }
-    loadPreview(state.path, params);
+    refreshLinkedWidgets(params);
+  }
+
+  function refreshLinkedWidgets(params) {
+    var token = ++state.reqToken;
+    var qs = new URLSearchParams();
+    qs.set('path', state.path);
+    Object.keys(params || {}).forEach(function (k) {
+      var v = params[k];
+      if (v !== undefined && v !== null && v !== '') qs.set(k, v);
+    });
+    fetch('/api/preview?' + qs.toString())
+      .then(function (res) {
+        return res.json().then(function (data) {
+          if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          if (data.error) throw new Error(data.error);
+          return data;
+        });
+      })
+      .then(function (data) {
+        if (token !== state.reqToken) return;
+        state.params = params;
+        state.preview = data;
+        syncHash();
+        if (!updatePageInPlace(data)) renderPage();
+      })
+      .catch(function (err) {
+        if (window.console) console.warn('linkage refresh failed', err);
+      });
+  }
+
+  // Rebinds widget data on the existing DOM. Keeping the DOM means the page
+  // scale and every widget position stay exactly where the user left them.
+  // Returns false when the widget set changed and a full render is safer.
+  function updatePageInPlace(data) {
+    if (data.kind !== 'fvs') return false;
+    var page = (data.pages || [])[state.page];
+    var pageEl = els.previewRoot.querySelector('.fvs-page');
+    if (!page || !pageEl) return false;
+    var widgets = page.widgets || [];
+    if (pageEl.querySelectorAll('.fvs-widget').length !== widgets.length) return false;
+    widgets.forEach(function (w) {
+      var el = pageEl.querySelector('.fvs-widget[data-id="' + (w.id || '') + '"]');
+      if (!el) return;
+      if (w.type === 'chart') {
+        var box = el.querySelector('.chart-box');
+        if (!box || !window.echarts) return;
+        var inst = window.echarts.getInstanceByDom(box);
+        if (!inst) return;
+        // Preserve a manual map zoom/pan across the refresh.
+        var view = null;
+        try {
+          var prev = inst.getOption();
+          var ps = prev.series && prev.series[0];
+          if (ps && ps.type === 'map') view = { zoom: ps.zoom, center: ps.center };
+        } catch (e) { /* ignore */ }
+        var spec = w.chart || {};
+        if (w.clickParam) spec.clickParam = w.clickParam;
+        box._spec = spec;
+        var opt = chartOption(spec);
+        if (opt) {
+          inst.setOption(opt, true);
+          if (view && opt.series && opt.series[0] && opt.series[0].type === 'map') {
+            inst.setOption({ series: [{ zoom: view.zoom, center: view.center }] });
+          }
+        }
+      } else if (w.type === 'workbook') {
+        el.innerHTML = '';
+        renderWorkbookWidget(el, w);
+      } else if (/^(d-)?text(-title|-time)?$/.test(w.type)) {
+        var t = el.querySelector('.fvs-text');
+        if (t) fillTextWidget(t, w);
+      }
+    });
+    return true;
   }
 
   // FineVis "webPage" action: open the target in an in-page overlay with a
@@ -1410,27 +1488,7 @@
       case 'd-text-time':
         var text = document.createElement('div');
         text.className = 'fvs-text';
-        applyTextStyle(text, w.style || {});
-        // FVS text boxes have a fixed size. FineReport keeps rich text on one
-        // line unless the author inserted an explicit <br>, and lets glyphs
-        // overflow the box instead of wrapping/clipping them. Putting the
-        // markup in a single wrapper also stops the flex column from turning
-        // every <br> into its own flex item.
-        var rawHtml = String(w.html || '');
-        if (rawHtml) {
-          // The editor leaves trailing <br> for empty lines. They inflate the
-          // content height and, with vertical centering, clip the first line
-          // (e.g. the "华北" label above a KPI number).
-          var holder = document.createElement('div');
-          holder.className = 'fvs-text-content';
-          holder.innerHTML = rawHtml.replace(/(?:\s|<br\s*\/?>)+$/i, '');
-          text.appendChild(holder);
-          text.style.whiteSpace = 'nowrap';
-        } else {
-          var plain = String(w.text || '').replace(/\s+$/, '');
-          text.textContent = plain;
-          text.style.whiteSpace = /\n/.test(plain) ? 'pre' : 'nowrap';
-        }
+        fillTextWidget(text, w);
         el.appendChild(text);
         if (w.link && w.link.url) {
           el.classList.add('fvs-link');
@@ -1505,6 +1563,33 @@
       initCharts(pageEl);
       resizeCharts();
     });
+  }
+
+  // Fills (or refills) an FVS text widget. Shared by the initial build and by
+  // in-place linkage updates so both paths render rich text identically.
+  function fillTextWidget(text, w) {
+    applyTextStyle(text, w.style || {});
+    text.innerHTML = '';
+    // FVS text boxes have a fixed size. FineReport keeps rich text on one
+    // line unless the author inserted an explicit <br>, and lets glyphs
+    // overflow the box instead of wrapping/clipping them. Putting the markup
+    // in a single wrapper also stops the flex column from turning every <br>
+    // into its own flex item.
+    var rawHtml = String(w.html || '');
+    if (rawHtml) {
+      // The editor leaves trailing <br> for empty lines. They inflate the
+      // content height and, with vertical centering, clip the first line
+      // (e.g. the "华北" label above a KPI number).
+      var holder = document.createElement('div');
+      holder.className = 'fvs-text-content';
+      holder.innerHTML = rawHtml.replace(/(?:\s|<br\s*\/?>)+$/i, '');
+      text.appendChild(holder);
+      text.style.whiteSpace = 'nowrap';
+    } else {
+      var plain = String(w.text || '').replace(/\s+$/, '');
+      text.textContent = plain;
+      text.style.whiteSpace = /\n/.test(plain) ? 'pre' : 'nowrap';
+    }
   }
 
   function applyTextStyle(el, s) {
@@ -1678,12 +1763,17 @@
       if (!slices.length) return null;
       if (kind === 'pie') {
         var labelInside = spec.labelInside === true;
+        // FineReport's innerRadius=0 is a solid pie; only a positive value
+        // creates a ring. The old code always drew a donut.
+        var pieOuter = 62;
+        var pieHole = Math.max(0, Math.min(0.95, Number(spec.pieInnerRadius) || 0)) * pieOuter;
+        var pieRadius = pieHole > 0 ? [pieHole + '%', pieOuter + '%'] : pieOuter + '%';
         return shallow(base, {
           tooltip: { trigger: 'item', formatter: '{b}<br/>{c} ({d}%)' },
           legend: legend,
           series: [{
             type: 'pie',
-            radius: ['30%', '62%'],
+            radius: pieRadius,
             center: ['50%', '54%'],
             minAngle: 2,
             avoidLabelOverlap: true,
@@ -2061,8 +2151,18 @@
       });
       var mapData = [];
       var seen = {};
-      var minV = Infinity;
-      var maxV = -Infinity;
+      // FineReport colours whole regions, not individual provinces, and draws
+      // no province borders inside a region. Rank regions by value and assign
+      // one flat colour to every member so the block reads as a single shape.
+      var AREA_COLORS = ['#7baac7', '#1f84c5', '#4a90e2', '#6fb1e3', '#9ad0ef'];
+      var regionColor = {};
+      // Sort by name, not value: a linkage filter changes the numbers (and
+      // sometimes the visible set), but a region must keep its colour.
+      entries.slice().sort(function (a, b) {
+        return String(a.name).localeCompare(String(b.name), 'zh');
+      }).forEach(function (e, i) {
+        regionColor[e.name] = AREA_COLORS[i % AREA_COLORS.length];
+      });
       entries.forEach(function (e) {
         var provs = CHINA_REGIONS[e.name];
         if (provs) {
@@ -2084,6 +2184,13 @@
             if (seen[p]) return;
             seen[p] = 1;
             var item = { name: p, value: e.value };
+            // Same fill and no border on every member province: the internal
+            // province lines disappear, leaving one continuous region shape.
+            item.itemStyle = {
+              areaColor: regionColor[e.name],
+              borderColor: regionColor[e.name],
+              borderWidth: 0
+            };
             if (p === best) {
               item.label = {
                 show: true,
@@ -2104,12 +2211,8 @@
             mapData.push({ name: full, value: e.value });
           }
         }
-        if (e.value < minV) minV = e.value;
-        if (e.value > maxV) maxV = e.value;
       });
       if (!mapData.length) return null;
-      if (!isFinite(minV)) { minV = 0; maxV = 1; }
-      if (maxV <= minV) maxV = minV + 1;
       var mapAreaNote = spec.mapArea ? spec.mapArea + (spec.drillDown ? '（钻取）' : '') : '';
       // FineReport's "滚轮缩放" (scroll-wheel zoom) lives in VanChartZoom >
       // zoomAttr.zoomGesture. When enabled the map must roam so the mouse
@@ -2122,16 +2225,21 @@
         scaleLimit = { min: 1, max: 16 };
       }
       // ECharts' default fit leaves a wide empty margin, so the country comes
-      // out small and off-centre. Pin it to the geometry centre and double
-      // the fitted scale: the map then fills the widget like FineReport's.
+      // out small and off-centre. Pin it to the geometry centre and enlarge
+      // the fitted scale. 1.5x fills the box height without clipping the
+      // northern/southern provinces (2x overflowed and cut them off).
       // FR's zoomlevel=0 means "auto" and is deliberately not reused here.
       var mapSeries = {
         type: 'map',
         map: 'china',
         roam: roam,
         center: state.chinaCenter || undefined,
-        zoom: 2,
+        zoom: 1.5,
         scaleLimit: scaleLimit,
+        // ECharts otherwise paints a coloured marker dot at every region
+        // centre; FineReport colours the region shape only.
+        showLegendSymbol: false,
+        symbolSize: 0,
         label: { show: false },
         itemStyle: {
           areaColor: dark ? 'rgba(96,156,225,0.10)' : '#eef2f8',
@@ -2156,12 +2264,6 @@
         title: hasTitle
           ? base.title
           : { show: !!mapAreaNote, text: mapAreaNote, left: 'center', top: 4, textStyle: { fontSize: 12, color: dark ? '#a9bcd6' : '#6b7280', fontFamily: FONT_STACK } },
-        visualMap: {
-          show: false,
-          min: minV,
-          max: maxV,
-          inRange: { color: dark ? ['#1CA7FF', '#0059B3'] : ['#BBD8F7', '#1B62C4'] }
-        },
         series: [mapSeries]
       });
     }

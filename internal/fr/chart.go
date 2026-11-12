@@ -114,6 +114,7 @@ func ParseChartSpec(chart *XNode, datasets map[string]*Dataset) (*ChartSpec, []s
 	parseChartTitle(chart, spec)
 	parseChartLegend(chart, spec)
 	parseChartLabel(chart, spec)
+	parseChartPie(chart, spec)
 	parseGaugeRange(plot, spec)
 	parseChartZoom(chart, plot, spec)
 	parseChartData(chart, spec, datasets, warn)
@@ -233,7 +234,33 @@ func parseChartColors(plot *XNode) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, oc := range root.FindAll("OColor") {
-		v, err := strconv.ParseInt(oc.Attr("colvalue"), 10, 64)
+		// VanChart stores the palette as a child chain:
+		//   <OColor><colvalue><FineColor color="-16723723"/></colvalue></OColor>
+		// Older templates put the number directly in a colvalue attribute.
+		// Reading only the attribute (as before) returned no colors at all,
+		// so the viewer fell back to its all-blue dark palette.
+		raw := oc.Attr("colvalue")
+		if raw == "" {
+			cv := oc.Child("colvalue")
+			if cv == nil {
+				cv = oc.Find("colvalue")
+			}
+			if cv != nil {
+				fc := cv.Child("FineColor")
+				if fc == nil {
+					fc = cv.Find("FineColor")
+				}
+				if fc != nil {
+					raw = fc.Attr("color")
+				} else {
+					raw = cv.Attr("color")
+				}
+			}
+		}
+		if raw == "" {
+			continue
+		}
+		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			continue
 		}
@@ -336,11 +363,11 @@ func parseChartLegend(chart *XNode, spec *ChartSpec) {
 		case 1:
 			spec.LegendPos = "top"
 		case 2:
-			spec.LegendPos = "right"
+			spec.LegendPos = "left"
 		case 3:
 			spec.LegendPos = "bottom"
 		case 4:
-			spec.LegendPos = "left"
+			spec.LegendPos = "right"
 		case 5:
 			spec.LegendPos = "right" // 右上 (top-right) → closest ECharts option
 		}
@@ -382,6 +409,22 @@ func parseChartLabel(chart *XNode, spec *ChartSpec) {
 	}
 	// No leader line ⇒ labels are inside the ring.
 	spec.LabelInside = !attr.AttrBool("showLine", false)
+}
+
+// parseChartPie reads PieAttr4VanChart.innerRadius. FineReport uses 0 for a
+// solid pie and 0..1 for a ring; the browser turns it into an ECharts radius
+// pair instead of hard-coding a donut hole.
+func parseChartPie(chart *XNode, spec *ChartSpec) {
+	if spec.Kind != "pie" {
+		return
+	}
+	pa := chart.Find("PieAttr4VanChart")
+	if pa == nil {
+		return
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(pa.Attr("innerRadius")), 64); err == nil && v >= 0 && v < 1 {
+		spec.PieInnerRadius = v
+	}
 }
 
 type chartDef struct {

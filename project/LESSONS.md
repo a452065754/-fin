@@ -902,3 +902,73 @@ doc/Advanced/Cacuate_Between_Cells/Chain.cpt → 环比公式
 2. `zoom` 是相对默认 fit 的乘数，所以尺寸无关，比写死像素安全。
 3. headless 截图时 ECharts 入场动画可能没跑完，柱子/饼图会凭空「消失」，
    极易误判成渲染回归 —— 先 `setOption({animation:false})` 再截图。
+
+---
+
+### L13 · 用户文字描述与截图冲突时，以截图为准
+
+**现象**：上一轮用户写「柱状图…图例左边 查看器是上面」，我把 VanChart
+`position=4` 映射成 `left` 并写进测试；这一轮用户明确说「官方在右边」，
+且官方截图（以及上一轮那张官方截图）里图例确实在**右侧**竖排。
+
+**教训**：截图是ground truth，一句口头方位词可能是口误或指另一张图。
+涉及「左/右/上/下」这类易混描述时，先把对应截图存下来、放大确认，
+再改枚举；改完把截图路径记进 PROGRESS，避免下次又翻案。
+（顺带：不要在只有一句描述时就给枚举写「看起来合理」的注释。）
+
+---
+
+### L14 · 「解析不到」要先看清是属性还是子节点链
+
+**现象**：柱形图 5 个系列全是蓝色系，横条图也是蓝色；前端 `DARK_PALETTE`
+本身全是蓝，看起来像主题配色问题。
+
+**真相**：模板其实自带完整调色板：
+`<newPlotFillStyle><ColorList><OColor><colvalue><FineColor color="-16723723"/>`
+`</colvalue></OColor>…`，而 `parseChartColors` 读的是
+`oc.Attr("colvalue")` —— `colvalue` 是**子元素**，不是属性。
+于是 `spec.Colors` 恒为空，前端每次都退回默认调色板。
+
+**教训**：
+1. 解析器返回空集合时，先 dump 命中节点的子节点名和属性键，
+   别急着去改前端常量。
+2. 修解析 > 换硬编码调色板：模板自带颜色一旦读出来，所有模板都受益；
+   换成新常量只解决这一张图。
+3. FineColor 的 `color` 是带 alpha 的 **signed int**（如 `-16723723`），
+   取 `& 0xFFFFFF` 才是 `#00d0f5`；写测试时直接断言最终 hex。
+
+---
+
+### L15 · 「点击后闪一下 / 位置全变」先查是不是整页重载
+
+**现象**：FVS 点击地图区域联动，官方是数据原地变化，查看器整屏闪一下，
+再回来时各组件位置和地图大小都变了。
+
+**真相**：`fvsLinkageClick` 直接调 `loadPreview`，而它会 `showLoading(true)`、
+`previewRoot.hidden=true`、清空并重建 DOM、重跑 `applyZoom()`、重新 init
+所有 ECharts 实例。闪烁来自隐藏/重建，位置漂移来自 fit 缩放重算，
+地图视角丢失来自实例被 dispose。
+
+**教训**：联动/筛选类交互应该**只更新数据、不重建容器**。
+按稳定的 `widget.id` 找到现有节点，图表 `setOption`、表格换内容、文本换文本；
+widget 结构真的变了才回退整页渲染。只把 loading 动画去掉是治标不治本。
+
+**验证技巧**：点击前把某个 DOM 节点存到 `window.__probe`，点击后比较
+`__probe === document.querySelector(...)`。同一个节点 = 没重建 = 不会闪，
+比看截图判断「有没有闪」可靠得多。
+
+---
+
+### L16 · visualMap 会盖掉 data item 的颜色；map 还会画多余 symbol
+
+**现象**：地图区域颜色跟官方不一致，且每个着色省份中心有一个青色小圆点。
+
+**真相**：
+1. `visualMap` 的 `inRange` 优先级高于 `data[].itemStyle.areaColor`，
+   所以即使给每个省份指定了颜色，也会被渐变色覆盖；而且所有区域数值相同时
+   会全部落到同一个色值。想按业务分组着色就**别用 visualMap**。
+2. ECharts map series 默认会在每个带数据的区域中心画一个 `circle`
+   （`type:'circle', r:3`，取 `color[0]`）。用
+   `showLegendSymbol:false` + `symbolSize:0` 才能去掉。
+3. 想让多个相邻省份看起来是「一整块」，除了同色，还要把
+   `borderColor` 设成同色并把 `borderWidth` 设为 0，否则省界会把它切碎。

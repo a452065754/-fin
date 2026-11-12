@@ -149,10 +149,13 @@ type ChartSpec struct {
 	// than outside with a leader line. FineReport stores this on the pie/ring
 	// label's layout Attr: an absent/disabled 牵引线 (showLine=false) means the
 	// labels sit inside the ring.
-	LabelInside bool   `json:"labelInside,omitempty"`
-	Stack       bool   `json:"stack,omitempty"`
-	Horizontal  bool   `json:"horizontal,omitempty"`
-	Warning     string `json:"warning,omitempty"`
+	LabelInside bool `json:"labelInside,omitempty"`
+	// PieInnerRadius is PieAttr4VanChart.innerRadius (0..1). 0 means a solid
+	// pie; a positive value produces FineReport's ring/donut chart.
+	PieInnerRadius float64 `json:"pieInnerRadius,omitempty"`
+	Stack          bool    `json:"stack,omitempty"`
+	Horizontal     bool    `json:"horizontal,omitempty"`
+	Warning        string  `json:"warning,omitempty"`
 
 	// FineReport charts that map onto no single ECharts type. The browser
 	// decides how faithfully it can draw them.

@@ -567,3 +567,57 @@ git ls-remote origin        # 确认远程 commit 号与本地一致
 **本项目实例**：地图 `zoom=1.5 / 2.0 / 2.5` 三张图一次产出，直接选定 2.0；
 同时从 `geo.rect = [0,0,135,53.6]` 看出 ECharts 把 0–73° 的空白经度也算进了
 适配框，从而定位到 GeoJSON 坐标范围问题，而不是继续瞎调布局参数。
+
+---
+
+### S12 · 用「截图取样 + XML 对照」确定真实配色，别靠肉眼猜色号
+
+**适用**：前端渲染颜色与官方不一致，且模板可能自带调色板。
+
+**做法**
+
+1. 用 Pillow 统计官方截图里**高饱和、高亮度**的主色（按 HSV 的
+   `s>0.45, v>0.5` 过滤，按像素数排序），拿到候选 hex。
+2. 从模板 XML dump 出所有 `FineColor color=...`，把 signed int 用
+   `v & 0xFFFFFF` 转成 hex，与截图候选比对。
+3. 两边对得上 ⇒ 颜色确实来自模板，去修**解析链路**；
+   对不上 ⇒ 才考虑主题/调色板常量。
+4. 把最终 hex 序列写进回归测试，防止以后再悄悄退回默认色。
+
+**本项目实例**：官方柱图取样得到 `#1b9fff` / `#ff894d`，
+XML 里的 `-16723723 / -15034369 / -10117 / -32183 / -8466541` 转成
+`#00d0f5 / #1a97ff / #ffd87b / #ff8249 / #7ecf93`，与截图的
+「青/蓝/黄/橙/绿」完全对应，于是定位到 `parseChartColors` 读错节点层级，
+而不是 `DARK_PALETTE` 颜色不好看。
+
+**配套**：CDP 里 `inst.getOption().color` 可以直接读出前端最终采用的调色板，
+用来确认「模板色有没有真的传到 ECharts」。
+
+---
+
+### S13 · 用 CDP 模拟真实点击，验证「联动是否局部刷新」
+
+**适用**：图表联动 / 筛选交互，需要证明页面没有整页重载、没有闪烁、
+缩放与地图视角没有丢失。
+
+**做法**
+
+1. 点击坐标别用目测：从图表实例反算——
+   `cs = inst.getModel().getSeriesByIndex(0).coordinateSystem`，
+   `pt = cs.dataToPoint(cs.getRegion('河北省').center)`，
+   再换算到视口：`rect.left + pt[0] * (rect.width / box.clientWidth)`。
+   **必须乘页面缩放比例**，否则页面有 `transform:scale()` 时点不中。
+2. `Input.dispatchMouseEvent` 发 `mousePressed` + `mouseReleased`。
+3. 点击前存 `window.__probe = document.querySelector('.fvs-widget')`，
+   点击后比较 `window.__probe === document.querySelector('.fvs-widget')`。
+   `true` 就证明 DOM 没重建，不会闪。
+4. 同时记录 `.page-scale` 的 `transform`、`getOption().series[0].zoom/center`、
+   标题文本、表格单元格，点击后逐项对比，一次验证「位置不变 + 数据已变」。
+5. 想查 canvas 里多画了什么（比如莫名的圆点），用
+   `inst.getZr().storage.getDisplayList()` 过滤 `type==='circle'`，
+   能直接看到 `r` 和 `fill`，比放大截图猜快。
+
+**本项目实例**：一次点击同时验证了 `sameDom=true`、
+`pageTransform` 前后均为 `scale(0.967187)`、`mapZoom=1.5` 不变、
+标题切换成「华北…」、URL 追加 `area=华北`；并从 displayList 发现
+13 个 `r:3 / fill:#00d0f5` 的多余圆点，定位到 ECharts map 的默认 symbol。

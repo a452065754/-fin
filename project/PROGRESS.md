@@ -762,6 +762,8 @@ python3 tools/verify_docs.py    # PASS
 | 2 | 2026-10-21 | T 填报模式 + H5 | `7817b7f` | 91 → 102 |
 | 2 | 2026-10-21 | U 安全防护开关 + 缺口修复 | 本次 | 102 → 116 |
 | 3 | 2026-11-11 | V FVS 预览保真（7 项渲染差异） | 本次 | 116 → 123 |
+| 4 | 2026-11-12 | W FVS 第二轮保真（配色/饼图/图例/地图） | 本次 | 123 → 126 |
+| 5 | 2026-11-12 | X 地图区域着色 + 联动局部刷新 | 本次 | 126 → 126 |
 
 ---
 
@@ -822,3 +824,102 @@ python3 tools/verify_docs.py    # PASS
 - `spec.ZoomLevel`/`ZoomVisible`/`ZoomScaling` 前端目前只消费 `ZoomGesture`；
   FR 的 `zoomlevel` 实际存在 `VanChartMapPlotAttr` 上，当前从 `<Plot>` 读恒为 0。
 - 4 个环境相关测试需要把硬编码 `F:/tomcat-win64` 改成可注入路径（另开一轮）。
+
+---
+
+## 2026-11-12 · 第 4 轮 · FVS 第二轮保真（配色 / 饼图形状 / 图例方向 / 地图）
+
+**做了什么**
+
+- `internal/fr/chart.go`
+  - `parseChartLegend`：**纠正上一轮的映射错误**，VanChart `position=4` 是 `right`
+    而不是 `left`（`2` 才是 `left`）。上一轮把用户描述理解反了，官方截图一直
+    显示图例在右侧。
+  - `parseChartColors`：模板的调色板是
+    `<newPlotFillStyle><ColorList><OColor><colvalue><FineColor color="..."/>`
+    **子节点链**，原实现读 `oc.Attr("colvalue")` 恒为空，导致 `spec.Colors` 为空、
+    前端退回全蓝的 `DARK_PALETTE`。改为优先读属性、回落子节点链。
+  - 新增 `parseChartPie`：读 `PieAttr4VanChart.innerRadius`（0=实心，>0=圆环）。
+- `internal/fr/model.go`：`ChartSpec` 加 `PieInnerRadius`。
+- `web/app.js`
+  - 饼图 `radius` 由 `pieInnerRadius` 生成（0 → `'62%'` 实心），不再写死
+    `['30%','62%']` 圆环。
+  - 地图 `zoom` 从 2 降到 1.5：2 倍会超容器高度、把内蒙古/南海诸岛裁掉。
+- 新增 3 个回归测试：`TestChartLegendPosition2Left`、
+  `TestChartColorsFromPlotFillStyle`（断言青/蓝/黄/橙/绿五个色值）、
+  `TestChartPieInnerRadius`（0 与 0.6 两例）；把
+  `TestChartLegendVisibleLeft` 改名为 `...VisibleRight` 并改断言。
+
+**怎么验证的**
+
+- `FR_TEST_WEBROOT=D:/FineReport_11.0/webapps/webroot go test ./internal/fr/ -run TestChart...`
+  8 个图表测试全绿；`node --check web/app.js`、Windows exe 构建通过。
+- `/api/preview` 实测：4 个图表都带
+  `colors=['#00d0f5','#1a97ff','#ffd87b','#ff8249','#7ecf93','#00b67d']`，
+  柱图 `legendPos=right`，饼图 `pieInnerRadius` 省略（=0 实心）。
+- Edge 无头 + CDP 关动画后截图：饼图实心、图例在右且竖排、柱图五彩色、
+  横条青色、地图完整（新疆/西藏/内蒙古/东北/南海诸岛都在）且居中。
+- `tools/gen_status.py` 刷新到 126 例，同步 docs 与 INDEX 的过期数字，
+  `tools/verify_docs.py` PASS。
+
+**关键决策**
+
+- **截图优先于文字描述**：上一轮据一句「图例左边」把枚举改反，这轮官方截图
+  明确在右。遇到冲突时保存原始截图并直接取样，而不是再猜一次。
+- 颜色不硬编码成新常量：修解析让**模板自己的调色板**生效，其它模板同样受益；
+  用 PIL 对官方截图做高饱和色采样，与 XML 色值互相印证。
+- 地图 `zoom` 选「刚好不裁切」而非「尽量大」：显示不全比留白更影响使用。
+
+**遗留 / 阻塞**
+
+- `start-preview.bat`（一键启动脚本）为本轮新增文件，尚未提交。
+- 上一轮的本地提交 `d357303` 仍未推送远端。
+
+---
+
+## 2026-11-12 · 第 5 轮 · 地图区域着色与点击联动（局部刷新）
+
+**做了什么**（只改 `web/app.js`）
+
+- 地图区域着色
+  - 删掉 `visualMap`：它把所有区域染成同一个亮蓝 `#1CA7FF`，且会覆盖
+    data item 的 `itemStyle.areaColor`。
+  - 新增按**区域**固定配色（官方取样：华北 `#7baac7`、华东 `#1f84c5`），
+    按区域名 `localeCompare('zh')` 排序分配，保证联动筛选后颜色不漂移。
+  - 每个成员省份设同色 + `borderColor` 同色 + `borderWidth:0`，
+    隐藏区域内省界，让华东/华北各自成为一整块。
+  - `showLegendSymbol:false` + `symbolSize:0`：去掉 ECharts 在每个着色省份
+    中心画的 13 个青色 `#00d0f5` 小圆点（官方没有）。
+- 点击联动改为局部刷新
+  - `fvsLinkageClick` 不再调用 `loadPreview`（会 `showLoading` + 隐藏并
+    重建整个 DOM，导致闪烁、页面 fit 重算、地图 pan/zoom 丢失）。
+  - 新增 `refreshLinkedWidgets(params)`：请求 `/api/preview` 后调用
+    `updatePageInPlace(data)`，按 `widget.id` 找到现有 DOM，图表用
+    `inst.setOption(opt, true)`、表格重建内容、文本用新抽出的
+    `fillTextWidget` 原地刷新；widget 数量变化时回退到 `renderPage()`。
+  - 刷新前读取地图 `zoom/center`，刷新后恢复，保留用户手动缩放。
+  - 抽出共用函数 `fillTextWidget(text, w)`，初始构建与局部刷新走同一套富文本逻辑。
+
+**怎么验证的**
+
+- CDP 用 `coordinateSystem.getRegion('河北省').center` + `dataToPoint` 算出
+  真实点击坐标（**要乘页面缩放比例** `rect.width/clientWidth`，第一次没乘
+  导致点空），再用 `Input.dispatchMouseEvent` 模拟点击。
+- 点击前把首个 widget 节点存到 `window.__firstWidget`，点击后比较：
+  `sameDom=true` → 证明没有重建 DOM，也就不会闪。
+- `pageTransform` 点击前后都是 `scale(0.967187)`，`mapZoom=1.5` 与 center 不变；
+  标题切换为「华北…」、表格为华北 4 人、URL 追加 `area=华北`。
+- 初始状态 `hasVisualMap=false`、`dotCount=0`、区域内各省同色且
+  `borderWidth=0`；截图确认华北浅灰蓝整块、华东中蓝整块、无碎块无圆点。
+- `tools/gen_status.py` + `tools/verify_docs.py` PASS（126 例不变，前端行数刷新）。
+
+**关键决策**
+
+- 联动刷新**不重建 DOM**是根治「闪一下 + 位置变化」的办法，只去掉
+  loading 动画不够；`applyZoom` 重跑才是位置漂移的来源。
+- 区域颜色按名称而非按值排序：值会随筛选变化，名称不会。
+- 不硬编码省份→颜色表，仍走 `CHINA_REGIONS` 展开，其它模板的区域同样生效。
+
+**遗留 / 阻塞**
+
+- 本轮改动未提交；`start-preview.bat` 仍未跟踪；本地提交 `d357303` 仍未推送。

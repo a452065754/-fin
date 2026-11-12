@@ -679,13 +679,14 @@ func TestChartLegendNestedAttr(t *testing.T) {
 	if spec.Legend != false {
 		t.Errorf("visible=false 应隐藏图例，实际 Legend=%v", spec.Legend)
 	}
-	if spec.LegendPos != "left" {
-		t.Errorf("position=4 应为 left，实际 LegendPos=%q", spec.LegendPos)
+	if spec.LegendPos != "right" {
+		t.Errorf("position=4 应为 right，实际 LegendPos=%q", spec.LegendPos)
 	}
 }
 
-// TestChartLegendVisibleLeft verifies a visible legend positioned to the left.
-func TestChartLegendVisibleLeft(t *testing.T) {
+// TestChartLegendVisibleRight verifies a visible legend positioned to the
+// right, which is what FineReport's VanChart position=4 means.
+func TestChartLegendVisibleRight(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <CC xmlVersion="20211223" releaseVersion="11.0.0">
   <Legend4VanChart>
@@ -704,8 +705,25 @@ func TestChartLegendVisibleLeft(t *testing.T) {
 	if !spec.Legend {
 		t.Errorf("visible=true 应显示图例")
 	}
+	if spec.LegendPos != "right" {
+		t.Errorf("position=4 应为 right，实际 LegendPos=%q", spec.LegendPos)
+	}
+}
+
+// TestChartLegendPosition2Left covers the opposite side of the VanChart enum.
+func TestChartLegendPosition2Left(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<CC xmlVersion="20211223" releaseVersion="11.0.0">
+  <Legend4VanChart><Legend><Attr position="2" visible="true" themed="false"/></Legend></Legend4VanChart>
+  <Plot class="com.fr.plugin.chart.plots.VanChartColumnPlot"/>
+</CC>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	spec, _ := ParseChartSpec(root, map[string]*Dataset{})
 	if spec.LegendPos != "left" {
-		t.Errorf("position=4 应为 left，实际 LegendPos=%q", spec.LegendPos)
+		t.Errorf("position=2 应为 left，实际 LegendPos=%q", spec.LegendPos)
 	}
 }
 
@@ -731,5 +749,68 @@ func TestChartPieLabelInside(t *testing.T) {
 	}
 	if !spec.LabelInside {
 		t.Errorf("showLine=false 应为内部标签，实际 LabelInside=%v", spec.LabelInside)
+	}
+}
+
+// TestChartColorsFromPlotFillStyle guards the VanChart palette. The colour is
+// a child chain <OColor><colvalue><FineColor color=.../></colvalue></OColor>,
+// not an attribute on OColor; reading only the attribute silently returned an
+// empty palette and the viewer fell back to an all-blue theme.
+func TestChartColorsFromPlotFillStyle(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<CC xmlVersion="20211223" releaseVersion="11.0.0">
+  <Plot class="com.fr.plugin.chart.column.VanChartColumnPlot">
+    <newPlotFillStyle>
+      <AttrFillStyle><AFStyle colorStyle="1"/></AttrFillStyle>
+      <ColorList>
+        <OColor><colvalue><FineColor color="-16723723"/></colvalue></OColor>
+        <OColor><colvalue><FineColor color="-15034369"/></colvalue></OColor>
+        <OColor><colvalue><FineColor color="-10117"/></colvalue></OColor>
+        <OColor><colvalue><FineColor color="-32183"/></colvalue></OColor>
+        <OColor><colvalue><FineColor color="-8466541"/></colvalue></OColor>
+      </ColorList>
+    </newPlotFillStyle>
+  </Plot>
+</CC>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	spec, _ := ParseChartSpec(root, map[string]*Dataset{})
+	want := []string{"#00d0f5", "#1a97ff", "#ffd87b", "#ff8249", "#7ecf93"}
+	if len(spec.Colors) < len(want) {
+		t.Fatalf("期望至少 %d 个颜色，实际 %d 个: %v", len(want), len(spec.Colors), spec.Colors)
+	}
+	for i, w := range want {
+		if spec.Colors[i] != w {
+			t.Errorf("第 %d 个颜色应为 %s，实际 %s", i, w, spec.Colors[i])
+		}
+	}
+}
+
+// TestChartPieInnerRadius checks that a solid pie (innerRadius=0) stays solid
+// and a ring keeps its hole, instead of the viewer always drawing a donut.
+func TestChartPieInnerRadius(t *testing.T) {
+	cases := []struct {
+		value string
+		want  float64
+	}{{"0.0", 0}, {"0.6", 0.6}}
+	for _, tc := range cases {
+		xml := `<?xml version="1.0" encoding="UTF-8"?>
+<CC xmlVersion="20211223" releaseVersion="11.0.0">
+  <PieAttr4VanChart roseType="normal" startAngle="0.0" endAngle="360.0" innerRadius="` + tc.value + `" supportRotation="false"/>
+  <Plot class="com.fr.plugin.chart.PiePlot4VanChart"/>
+</CC>`
+		root, err := ParseXML([]byte(xml))
+		if err != nil {
+			t.Fatalf("解析失败: %v", err)
+		}
+		spec, _ := ParseChartSpec(root, map[string]*Dataset{})
+		if spec.Kind != "pie" {
+			t.Fatalf("期望 pie，实际 %s", spec.Kind)
+		}
+		if spec.PieInnerRadius != tc.want {
+			t.Errorf("innerRadius=%s 应解析为 %v，实际 %v", tc.value, tc.want, spec.PieInnerRadius)
+		}
 	}
 }
