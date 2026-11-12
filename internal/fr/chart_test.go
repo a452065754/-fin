@@ -140,6 +140,60 @@ func TestChartDrillMap(t *testing.T) {
 	t.Logf("kind=%s drill=%v cats=%d", c.Kind, c.DrillDown, len(c.Categories))
 }
 
+// FineReport maps can enable "滚轮缩放" (scroll-wheel zoom) via VanChartZoom >
+// zoomAttr.zoomGesture. The viewer must carry that flag to the browser so the
+// ECharts map gets roam=true; otherwise the wheel does nothing.
+func TestChartMapZoomGesture(t *testing.T) {
+	const xml = `<Report><Chart>` +
+		`<Plot class="com.fr.plugin.chart.map.VanMapPlot" mapType="area" zoomlevel="0"/>` +
+		`</Chart>` +
+		`<VanChartZoom><zoomAttr zoomVisible="false" zoomGesture="true" zoomResize="true" scaling="0.3"/></VanChartZoom>` +
+		`</Report>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("解析内联图表 XML 失败: %v", err)
+	}
+	spec, _ := ParseChartSpec(root, map[string]*Dataset{})
+	if spec.Kind != "map" {
+		t.Fatalf("图表类型=%q, 期望 map", spec.Kind)
+	}
+	if !spec.ZoomGesture {
+		t.Errorf("ZoomGesture 应为 true（地图需支持滚轮缩放），实际 false")
+	}
+	if math.Abs(spec.ZoomScaling-0.3) > 1e-9 {
+		t.Errorf("ZoomScaling=%v, 期望 0.3", spec.ZoomScaling)
+	}
+	if spec.ZoomVisible {
+		t.Errorf("ZoomVisible 应为 false，实际 true")
+	}
+	if spec.ZoomLevel != 0 {
+		t.Errorf("ZoomLevel=%v, 期望 0", spec.ZoomLevel)
+	}
+}
+
+// A map whose VanChartZoom disables the gesture must stay static (roam=false).
+func TestChartMapNoZoomGesture(t *testing.T) {
+	const xml = `<Report><Chart>` +
+		`<Plot class="com.fr.plugin.chart.map.VanMapPlot" mapType="area" zoomlevel="2"/>` +
+		`</Chart>` +
+		`<VanChartZoom><zoomAttr zoomVisible="true" zoomGesture="false" scaling="0.5"/></VanChartZoom>` +
+		`</Report>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("解析内联图表 XML 失败: %v", err)
+	}
+	spec, _ := ParseChartSpec(root, map[string]*Dataset{})
+	if spec.Kind != "map" {
+		t.Fatalf("图表类型=%q, 期望 map", spec.Kind)
+	}
+	if spec.ZoomGesture {
+		t.Errorf("ZoomGesture 应为 false（未开启滚轮缩放），实际 true")
+	}
+	if spec.ZoomLevel != 2 {
+		t.Errorf("ZoomLevel=%v, 期望 2", spec.ZoomLevel)
+	}
+}
+
 // Gantt renders as a horizontal bar chart.
 func TestChartGantt(t *testing.T) {
 	c := firstChartOfKind(t, "doc/Chart/GanttChart/关联线甘特图.cpt", "gantt")
@@ -594,5 +648,88 @@ func TestNoDowngradeWarnings(t *testing.T) {
 	}
 	if !found {
 		t.Skip("样例模板均无图表数据")
+	}
+}
+
+// TestChartLegendNestedAttr guards against the bug where parseChartLegend used
+// a recursive Find("Attr") and matched the unrelated <Attr> nested inside
+// <GI><AttrBackground> (gradient/background flags) instead of the direct
+// <Attr position visible> child of <Legend>. The layout Attr must win.
+func TestChartLegendNestedAttr(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<CC xmlVersion="20211223" releaseVersion="11.0.0">
+  <Legend4VanChart>
+    <Legend>
+      <GI>
+        <AttrBackground>
+          <Attr gradientType="normal" shadow="false" autoBackground="false" themed="false"/>
+        </AttrBackground>
+      </GI>
+      <Attr position="4" visible="false" themed="false"/>
+      <FRFont name="Microsoft YaHei" style="0" size="96"/>
+    </Legend>
+  </Legend4VanChart>
+  <Plot class="com.fr.plugin.chart.plots.VanChartPiePlot"/>
+</CC>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	spec, _ := ParseChartSpec(root, map[string]*Dataset{})
+	if spec.Legend != false {
+		t.Errorf("visible=false 应隐藏图例，实际 Legend=%v", spec.Legend)
+	}
+	if spec.LegendPos != "left" {
+		t.Errorf("position=4 应为 left，实际 LegendPos=%q", spec.LegendPos)
+	}
+}
+
+// TestChartLegendVisibleLeft verifies a visible legend positioned to the left.
+func TestChartLegendVisibleLeft(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<CC xmlVersion="20211223" releaseVersion="11.0.0">
+  <Legend4VanChart>
+    <Legend>
+      <GI><AttrBackground><Attr gradientType="normal" themed="false"/></AttrBackground></GI>
+      <Attr position="4" visible="true" themed="false"/>
+    </Legend>
+  </Legend4VanChart>
+  <Plot class="com.fr.plugin.chart.plots.VanChartColumnPlot"/>
+</CC>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	spec, _ := ParseChartSpec(root, map[string]*Dataset{})
+	if !spec.Legend {
+		t.Errorf("visible=true 应显示图例")
+	}
+	if spec.LegendPos != "left" {
+		t.Errorf("position=4 应为 left，实际 LegendPos=%q", spec.LegendPos)
+	}
+}
+
+// TestChartPieLabelInside verifies pie data labels are read as inside when the
+// template uses "饼图内" (no leader line).
+func TestChartPieLabelInside(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<CC xmlVersion="20211223" releaseVersion="11.0.0">
+  <AttrLabel>
+    <labelDetail class="com.fr.plugin.chart.base.AttrLabelDetail">
+      <Attr showLine="false" isHorizontal="true" autoAdjust="false" position="5" align="9" isCustom="false"/>
+    </labelDetail>
+  </AttrLabel>
+  <Plot class="com.fr.plugin.chart.PiePlot4VanChart"/>
+</CC>`
+	root, err := ParseXML([]byte(xml))
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	spec, _ := ParseChartSpec(root, map[string]*Dataset{})
+	if spec.Kind != "pie" {
+		t.Fatalf("期望 pie，实际 %s", spec.Kind)
+	}
+	if !spec.LabelInside {
+		t.Errorf("showLine=false 应为内部标签，实际 LabelInside=%v", spec.LabelInside)
 	}
 }

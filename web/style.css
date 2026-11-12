@@ -1005,11 +1005,17 @@ svg {
   justify-content: center;
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  /* FineReport lets text spill out of its box rather than wrapping or
+     clipping it (e.g. "点击查看FVS详情" on a 178px wide title widget). */
+  overflow: visible;
 }
 
 .fvs-text > * {
   max-width: 100%;
+}
+
+.fvs-text-content {
+  line-height: 1.25;
 }
 
 .fvs-image {

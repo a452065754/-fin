@@ -761,3 +761,64 @@ python3 tools/verify_docs.py    # PASS
 | 2 | 2026-10-21 | S 公式引擎补齐 | `8698377` | 66 → 91 |
 | 2 | 2026-10-21 | T 填报模式 + H5 | `7817b7f` | 91 → 102 |
 | 2 | 2026-10-21 | U 安全防护开关 + 缺口修复 | 本次 | 102 → 116 |
+| 3 | 2026-11-11 | V FVS 预览保真（7 项渲染差异） | 本次 | 116 → 123 |
+
+---
+
+## 2026-11-11 · 第 3 轮 · FVS 预览保真（对照官方截图修 7 处渲染差异）
+
+**做了什么**
+
+- `internal/fr/chart.go`
+  - `parseChartLegend`：改为遍历 `<Legend>` 的**直接子节点**，找带 `position`/`visible`
+    的 `<Attr>`。原来递归 `Find("Attr")` 命中的是 `<GI><AttrBackground><Attr
+    gradientType=... shadow=...>`，于是 `visible`/`position` 永远读空，图例永远显示
+    且默认在上方。
+  - 修正 VanChart 图例位置枚举：`1=top, 2=right, 3=bottom, 4=left`（旧引擎里
+    2/4 是反的）；`5`（右上）折到 `right`。
+  - 新增 `parseChartLabel`：饼/漏斗/多层饼读 `AttrLabel > labelDetail > Attr.showLine`，
+    `showLine=false` ⇒ `LabelInside=true`。FR 饼图标签只有「饼图内 / 饼图外」，
+    牵引线只对外部有意义，所以用 `showLine` 判定比猜 `position` 整数更可靠。
+  - `parseChartZoom`（上一轮）：`zoomAttr.zoomGesture` ⇒ `ZoomGesture`，供前端 `roam`。
+- `internal/fr/model.go`：`ChartSpec` 加 `LabelInside` 与 4 个地图缩放字段。
+- `web/app.js`
+  - 饼图：`label.position` 由 `labelInside` 决定，内部时 `labelLine.show=false`。
+  - 地图：新增 `normalizeChinaGeo`，把绝对经纬度平移到原点并同步平移
+    `properties.center`；`state.chinaCenter` 作为 `center`、`zoom:2` 覆盖默认 fit、
+    `roam` 由 `zoomGesture` 驱动、`scaleLimit.min=1`（`scaling` 是滚轮步长，
+    不是最小缩放）。
+  - 文本组件：富文本放进单个 wrapper、清理尾部 `<br>`、`white-space:nowrap`；
+    纯文本含 `\n` 用 `pre`，其余 `nowrap`。
+  - 表格单元格：去掉前导/尾随换行（FR 富文本的段落标记）。
+  - 横向柱图：`barWidth:'25%'` 取代 36px 上限。
+- `web/style.css`：`.fvs-text` 的 `overflow:hidden` → `visible`（FR 允许文字溢出框）。
+- 新增 5 个回归测试：图例嵌套 Attr 陷阱、可见左图例、饼图内标签、地图缩放开/关。
+
+**怎么验证的**
+
+- `FR_TEST_WEBROOT=D:/FineReport_11.0/webapps/webroot go test ./...`：图表相关全绿，
+  `internal/server` 全绿。仍有 4 个**预存在**的环境失败（`connection_test.go` 硬编码
+  `F:/tomcat-win64`、`render_test.go` 分组报表依赖 FRDemo 数据版本），与本次改动无关。
+- `node --check web/app.js` 与 `go build -o reportviewer.exe ./cmd/reportviewer` 通过。
+- `/api/preview?path=第一张FVS模板.fvs` 实测：地图/饼图/条形图 `legend=false`、
+  柱形图 `legend=true,legendPos=left`、饼图 `labelInside=true`、4 图 `zoomGesture=true`。
+- Edge 无头浏览器（CDP 关掉 ECharts 动画后截图）逐项与官方 14 张截图比对：7 项全恢复；
+  地图从「偏右下、约占容器 1/3」变成「居中、填满高度」。
+
+**关键决策**
+
+- 不靠猜 XML 结构：先打印运行时 `Attr` 的**全部属性键**，才发现「找到节点但属性
+  为空」是匹配错节点，不是转义或解析器问题（曾误关 `xml.HTMLAutoClose` 试验，
+  无效后已恢复）。
+- 地图不硬编码中心：从 GeoJSON 动态算几何中心；`zoom=2` 是相对 ECharts 默认 fit
+  的乘数，与容器尺寸无关，换模板仍成立。
+- 不改饼图形状：官方是实心饼、查看器是圆环，用户本轮只反馈标签位置，
+  保留圆环以免影响其他模板的 donut 配置。
+- 用 CDP 运行时 `setOption` 试 `zoom=1.5/2.0/2.5` 并截图校准，避免反复编译盲试。
+
+**遗留 / 阻塞**
+
+- 市/区级钻取 GeoJSON 仍缺 → ROADMAP P1-1（省级已落地，暂不勾 ✅）。
+- `spec.ZoomLevel`/`ZoomVisible`/`ZoomScaling` 前端目前只消费 `ZoomGesture`；
+  FR 的 `zoomlevel` 实际存在 `VanChartMapPlotAttr` 上，当前从 `<Plot>` 读恒为 0。
+- 4 个环境相关测试需要把硬编码 `F:/tomcat-win64` 改成可注入路径（另开一轮）。

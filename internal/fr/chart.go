@@ -113,7 +113,9 @@ func ParseChartSpec(chart *XNode, datasets map[string]*Dataset) (*ChartSpec, []s
 	spec.Colors = parseChartColors(plot)
 	parseChartTitle(chart, spec)
 	parseChartLegend(chart, spec)
+	parseChartLabel(chart, spec)
 	parseGaugeRange(plot, spec)
+	parseChartZoom(chart, plot, spec)
 	parseChartData(chart, spec, datasets, warn)
 	decorateSeries(spec, plot)
 	if len(spec.Series) == 0 {
@@ -205,6 +207,24 @@ func mapArea(plot *XNode) string {
 	return ""
 }
 
+// parseChartZoom mirrors FineReport's "滚轮缩放" (scroll-wheel zoom) onto the
+// spec. The configuration lives in a VanChartZoom > zoomAttr node that is a
+// sibling of the chart's Plot, and the plot also carries a zoomlevel attribute.
+// zoomGesture="true" is what makes the browser enable ECharts roam so the map
+// reacts to the mouse wheel; without it the map is static (roam=false).
+func parseChartZoom(chart *XNode, plot *XNode, spec *ChartSpec) {
+	if za := chart.Find("zoomAttr"); za != nil {
+		spec.ZoomGesture = za.AttrBool("zoomGesture", false)
+		spec.ZoomVisible = za.AttrBool("zoomVisible", false)
+		spec.ZoomScaling = za.AttrFloat("scaling", 0)
+	}
+	if zl := strings.TrimSpace(plot.Attr("zoomlevel")); zl != "" {
+		if v, err := strconv.ParseFloat(zl, 64); err == nil {
+			spec.ZoomLevel = v
+		}
+	}
+}
+
 func parseChartColors(plot *XNode) []string {
 	root := plot
 	if fs := plot.Find("newPlotFillStyle"); fs != nil {
@@ -265,6 +285,18 @@ func parseChartTitle(chart *XNode, spec *ChartSpec) {
 	}
 }
 
+// parseChartLegend reads the legend visibility and position from
+// Legend4VanChart > Legend > Attr. The layout Attr is a DIRECT child of
+// <Legend>; a recursive Find would instead match the unrelated <Attr> nested
+// inside <GI><AttrBackground>, which carries gradient/background flags and no
+// position/visible data, causing the legend to always render with defaults.
+//
+// FineReport's VanChart legend position is a clockwise enum:
+//
+//	1 = top (靠上), 2 = right (靠右), 3 = bottom (靠下), 4 = left (靠左)
+//
+// (the legacy non-VanChart engine used a different order; FVS charts are all
+// VanChart, so the clockwise mapping is the correct one here).
 func parseChartLegend(chart *XNode, spec *ChartSpec) {
 	ln := chart.Child("Legend4VanChart")
 	if ln == nil {
@@ -280,25 +312,76 @@ func parseChartLegend(chart *XNode, spec *ChartSpec) {
 	if legend == nil {
 		return
 	}
-	if attr := legend.Find("Attr"); attr != nil {
-		if !attr.AttrBool("visible", true) {
-			spec.Legend = false
-		}
-		if pos := attr.AttrInt("position", -1); pos >= 0 {
-			switch pos {
-			case 0:
-				spec.LegendPos = "center"
-			case 1:
-				spec.LegendPos = "top"
-			case 2:
-				spec.LegendPos = "left"
-			case 3:
-				spec.LegendPos = "bottom"
-			case 4:
-				spec.LegendPos = "right"
-			}
+	// Prefer the direct child Attr that actually carries position/visible.
+	var layout *XNode
+	for _, c := range legend.Children {
+		if c.Name == "Attr" && (c.Attr("position") != "" || c.Attr("visible") != "") {
+			layout = c
+			break
 		}
 	}
+	if layout == nil {
+		layout = legend.Child("Attr")
+	}
+	if layout == nil {
+		return
+	}
+	if !layout.AttrBool("visible", true) {
+		spec.Legend = false
+	}
+	if pos := layout.AttrInt("position", -1); pos >= 0 {
+		switch pos {
+		case 0:
+			spec.LegendPos = "center"
+		case 1:
+			spec.LegendPos = "top"
+		case 2:
+			spec.LegendPos = "right"
+		case 3:
+			spec.LegendPos = "bottom"
+		case 4:
+			spec.LegendPos = "left"
+		case 5:
+			spec.LegendPos = "right" // 右上 (top-right) → closest ECharts option
+		}
+	}
+}
+
+// parseChartLabel reads the pie/ring data-label layout. FineReport keeps it on
+// AttrLabel > labelDetail > Attr. A leader line (牵引线, showLine) only exists
+// for labels drawn outside the ring; when it is off (or absent because the
+// template uses "饼图内") the labels sit inside the sector. The position
+// attribute is the inside/outside enum; position=5 is the inside layout used by
+// the built-in demos.
+func parseChartLabel(chart *XNode, spec *ChartSpec) {
+	switch spec.Kind {
+	case "pie", "funnel", "multipie":
+	default:
+		return
+	}
+	al := chart.Find("AttrLabel")
+	if al == nil {
+		return
+	}
+	ld := al.Child("labelDetail")
+	if ld == nil {
+		ld = al.Find("labelDetail")
+	}
+	if ld == nil {
+		return
+	}
+	var attr *XNode
+	for _, c := range ld.Children {
+		if c.Name == "Attr" && (c.Attr("showLine") != "" || c.Attr("position") != "") {
+			attr = c
+			break
+		}
+	}
+	if attr == nil {
+		return
+	}
+	// No leader line ⇒ labels are inside the ring.
+	spec.LabelInside = !attr.AttrBool("showLine", false)
 }
 
 type chartDef struct {

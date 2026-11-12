@@ -864,3 +864,41 @@ doc/Advanced/Cacuate_Between_Cells/Chain.cpt → 环比公式
 4. 拦截事件也要能被观测：`GET /api/health` 的 `policy` 字段暴露当前状态
 
 ---
+
+---
+
+### L11 · 「节点找到了但属性是空的」先怀疑匹配到了同名嵌套节点
+
+**现象**：`legend.Find("Attr")` 返回非 nil，但 `visible` / `position` 都是空串；
+从 FVS 里提取出的 XML 明明写着 `position="4" visible="false"`。
+
+**误判路径**：先怀疑 `stringChartCollection` 的双重转义（`&quot;` / `\n`），
+再怀疑 `encoding/xml` 的 `HTMLAutoClose` 吞了属性；关掉 `AutoClose` 试验也无效。
+
+**真相**：`Find` 是递归的，而 `<Legend>` 下面有两个 `<Attr>`：
+`<GI><AttrBackground><Attr gradientType=... shadow=.../></AttrBackground></GI>`
+和真正管布局的 `<Attr position visible/>`。递归先命中了前者。
+打印 `attr.AttrMap` 的全部键（`gradientType / shadow / autoBackground / themed`）
+一眼就能看穿 —— 比继续猜解析器快得多。
+
+**教训**：XML 里同名标签嵌套极常见（`<Attr>` / `<Style>` / `<Value>`）。
+凡是要读「某个容器自己的配置」，用**直接子节点遍历 + 关键属性存在性判断**，
+不要用递归 `Find`。调试时先 dump 命中节点的全部属性键，再决定下一步。
+
+---
+
+### L12 · 绝对经纬度 GeoJSON 会让 ECharts 的 fit 从 (0,0) 起算
+
+**现象**：地图只有容器约 1/3 大且偏右下；换 `layoutCenter/layoutSize`、
+去掉 `zoom`、调 `aspectScale`、改 `left/right/top/bottom` 都改不动大小。
+
+**真相**：用 CDP 读 `geo.rect` 和 `firstTransform`，发现 ECharts 按
+`[0,0,135,53.6]` 的框去 fit，而中国真实经度是 **73.5–135°**，
+于是国土只落在框的右半边 —— 视觉上既小又偏右。
+把坐标平移到原点、用几何中心、再乘 `zoom:2` 才解决。
+
+**教训**：
+1. 地图「太小 / 偏移」别只调布局参数，先量**坐标系的 bbox 与变换矩阵**。
+2. `zoom` 是相对默认 fit 的乘数，所以尺寸无关，比写死像素安全。
+3. headless 截图时 ECharts 入场动画可能没跑完，柱子/饼图会凭空「消失」，
+   极易误判成渲染回归 —— 先 `setOption({animation:false})` 再截图。

@@ -22,6 +22,7 @@
     fvsDark: false,
     chinaGeo: null,
     chinaCenters: {},
+    chinaCenter: null,
     chinaGeoState: 'none',
     params: {},
     charts: [],
@@ -103,6 +104,46 @@
     if (ov) ov.remove();
   }
 
+  // The bundled GeoJSON stores absolute longitudes (73.5E..135E). ECharts
+  // measures a map from a bounding rect anchored at (0,0), so fitting it
+  // as-is squeezes the country into the right-hand ~45% of the widget: small
+  // and off-centre. Shift every coordinate (and every label center) so the
+  // real geometry starts at the origin, then ECharts fits the whole country.
+  function normalizeChinaGeo(gj) {
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    function scan(v) {
+      if (!Array.isArray(v)) return;
+      if (typeof v[0] === 'number' && typeof v[1] === 'number') {
+        if (v[0] < minX) minX = v[0];
+        if (v[1] < minY) minY = v[1];
+        if (v[0] > maxX) maxX = v[0];
+        if (v[1] > maxY) maxY = v[1];
+        return;
+      }
+      for (var i = 0; i < v.length; i++) scan(v[i]);
+    }
+    function shift(v) {
+      if (!Array.isArray(v)) return;
+      if (typeof v[0] === 'number' && typeof v[1] === 'number') {
+        v[0] -= minX;
+        v[1] -= minY;
+        return;
+      }
+      for (var i = 0; i < v.length; i++) shift(v[i]);
+    }
+    (gj.features || []).forEach(function (f) { scan(f.geometry && f.geometry.coordinates); });
+    if (!isFinite(minX) || !isFinite(minY) || (minX === 0 && minY === 0)) return;
+    (gj.features || []).forEach(function (f) {
+      if (f.geometry) shift(f.geometry.coordinates);
+      if (f.properties && f.properties.center) {
+        f.properties.center[0] -= minX;
+        f.properties.center[1] -= minY;
+      }
+    });
+    // Centre of the (now origin-based) geometry, used to pin the map mid-box.
+    state.chinaCenter = [(maxX - minX) / 2, (maxY - minY) / 2];
+  }
+
   // Loads (once) the offline China GeoJSON shipped with the viewer and
   // registers it with ECharts so area maps render real geometry.
   function ensureChinaGeo() {
@@ -116,6 +157,7 @@
         state.chinaGeoState = 'failed';
         return false;
       }
+      normalizeChinaGeo(gj);
       state.chinaGeo = gj;
       state.chinaGeoState = 'ready';
       gj.features.forEach(function (f) {
@@ -1170,7 +1212,10 @@
       } else if (cell.text !== undefined && cell.text !== null && cell.text !== '') {
         var inner = document.createElement('div');
         inner.className = 'cell-inner';
-        inner.textContent = String(cell.text);
+        // FineReport rich-text cells carry a leading/trailing paragraph break
+        // ("\n销售员"). Keeping it eats the first line, so the header is
+        // clipped by the fixed row height and shows as "销售" / "员".
+        inner.textContent = String(cell.text).replace(/^[\r\n]+/, '').replace(/[\r\n]+$/, '');
         el.appendChild(inner);
       }
       frag.appendChild(el);
@@ -1366,10 +1411,25 @@
         var text = document.createElement('div');
         text.className = 'fvs-text';
         applyTextStyle(text, w.style || {});
-        if (w.html) {
-          text.innerHTML = w.html;
+        // FVS text boxes have a fixed size. FineReport keeps rich text on one
+        // line unless the author inserted an explicit <br>, and lets glyphs
+        // overflow the box instead of wrapping/clipping them. Putting the
+        // markup in a single wrapper also stops the flex column from turning
+        // every <br> into its own flex item.
+        var rawHtml = String(w.html || '');
+        if (rawHtml) {
+          // The editor leaves trailing <br> for empty lines. They inflate the
+          // content height and, with vertical centering, clip the first line
+          // (e.g. the "华北" label above a KPI number).
+          var holder = document.createElement('div');
+          holder.className = 'fvs-text-content';
+          holder.innerHTML = rawHtml.replace(/(?:\s|<br\s*\/?>)+$/i, '');
+          text.appendChild(holder);
+          text.style.whiteSpace = 'nowrap';
         } else {
-          text.textContent = w.text || '';
+          var plain = String(w.text || '').replace(/\s+$/, '');
+          text.textContent = plain;
+          text.style.whiteSpace = /\n/.test(plain) ? 'pre' : 'nowrap';
         }
         el.appendChild(text);
         if (w.link && w.link.url) {
@@ -1617,6 +1677,7 @@
       });
       if (!slices.length) return null;
       if (kind === 'pie') {
+        var labelInside = spec.labelInside === true;
         return shallow(base, {
           tooltip: { trigger: 'item', formatter: '{b}<br/>{c} ({d}%)' },
           legend: legend,
@@ -1627,8 +1688,13 @@
             minAngle: 2,
             avoidLabelOverlap: true,
             itemStyle: { borderColor: dark ? '#0b1e33' : '#fff', borderWidth: 1 },
-            label: { fontSize: 10, color: dark ? '#d5e2f3' : '#475467', formatter: '{b}\n{d}%' },
-            labelLine: { length: 8, length2: 6 },
+            label: {
+              fontSize: 10,
+              color: dark ? '#d5e2f3' : '#475467',
+              formatter: '{b}\n{d}%',
+              position: labelInside ? 'inside' : 'outside'
+            },
+            labelLine: labelInside ? { show: false } : { length: 8, length2: 6 },
             data: slices
           }]
         });
@@ -2045,6 +2111,39 @@
       if (!isFinite(minV)) { minV = 0; maxV = 1; }
       if (maxV <= minV) maxV = minV + 1;
       var mapAreaNote = spec.mapArea ? spec.mapArea + (spec.drillDown ? '（钻取）' : '') : '';
+      // FineReport's "滚轮缩放" (scroll-wheel zoom) lives in VanChartZoom >
+      // zoomAttr.zoomGesture. When enabled the map must roam so the mouse
+      // wheel and drag actually scale/pan it; otherwise it stays static.
+      var roam = !!spec.zoomGesture;
+      var scaleLimit;
+      if (roam) {
+        // zoomScaling is FineReport's wheel step, not a lower bound. Keep a
+        // sane floor so a user cannot shrink the map below its fitted size.
+        scaleLimit = { min: 1, max: 16 };
+      }
+      // ECharts' default fit leaves a wide empty margin, so the country comes
+      // out small and off-centre. Pin it to the geometry centre and double
+      // the fitted scale: the map then fills the widget like FineReport's.
+      // FR's zoomlevel=0 means "auto" and is deliberately not reused here.
+      var mapSeries = {
+        type: 'map',
+        map: 'china',
+        roam: roam,
+        center: state.chinaCenter || undefined,
+        zoom: 2,
+        scaleLimit: scaleLimit,
+        label: { show: false },
+        itemStyle: {
+          areaColor: dark ? 'rgba(96,156,225,0.10)' : '#eef2f8',
+          borderColor: dark ? 'rgba(130,185,245,0.5)' : '#ffffff',
+          borderWidth: 0.6
+        },
+        emphasis: {
+          label: { show: true, color: '#ffffff' },
+          itemStyle: { areaColor: '#2E7CF6' }
+        },
+        data: mapData
+      };
       return shallow(base, {
         tooltip: {
           trigger: 'item',
@@ -2063,25 +2162,7 @@
           max: maxV,
           inRange: { color: dark ? ['#1CA7FF', '#0059B3'] : ['#BBD8F7', '#1B62C4'] }
         },
-        series: [{
-          type: 'map',
-          map: 'china',
-          roam: false,
-          layoutCenter: ['50%', '52%'],
-          layoutSize: '100%',
-          aspectScale: 0.85,
-          label: { show: false },
-          itemStyle: {
-            areaColor: dark ? 'rgba(96,156,225,0.10)' : '#eef2f8',
-            borderColor: dark ? 'rgba(130,185,245,0.5)' : '#ffffff',
-            borderWidth: 0.6
-          },
-          emphasis: {
-            label: { show: true, color: '#ffffff' },
-            itemStyle: { areaColor: '#2E7CF6' }
-          },
-          data: mapData
-        }]
+        series: [mapSeries]
       });
     }
 
@@ -2196,7 +2277,13 @@
         o.lineStyle = { width: 2 };
         if (kind === 'area') o.areaStyle = { opacity: 0.24 };
       } else if (type === 'bar') {
-        o.barMaxWidth = 36;
+        if (horizontal) {
+          // FineReport draws thin horizontal bars, roughly a quarter of the
+          // category band. The old 36px cap filled 60-70% of every row.
+          o.barWidth = '25%';
+        } else {
+          o.barMaxWidth = 36;
+        }
         o.itemStyle = { borderRadius: horizontal ? [0, 2, 2, 0] : [2, 2, 0, 0] };
       } else {
         o.symbolSize = 6;

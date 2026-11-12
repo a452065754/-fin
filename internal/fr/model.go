@@ -93,46 +93,46 @@ type CPTPage struct {
 }
 
 type OutCell struct {
-	R     int        `json:"r"`
-	C     int        `json:"c"`
-	RS    int        `json:"rs"`
-	CS    int        `json:"cs"`
-	Text  string     `json:"text,omitempty"`
+	R    int    `json:"r"`
+	C    int    `json:"c"`
+	RS   int    `json:"rs"`
+	CS   int    `json:"cs"`
+	Text string `json:"text,omitempty"`
 	// Bias carries the two labels of a cross-table corner header
 	// (BiasTextPainter, e.g. "销售员|地区") rendered split by a diagonal.
-	Bias   []string   `json:"bias,omitempty"`
+	Bias []string `json:"bias,omitempty"`
 	// NoDir marks a band cell emitted per detail row that FineReport actually
 	// renders as one cell spanning the whole vertical expansion (<Expand/>
 	// with no dir). The vertical renderer merges the duplicates. Transient:
 	// never serialised.
-	NoDir  bool       `json:"-"`
-	Style  Style      `json:"style,omitempty"`
-	Chart  *ChartSpec `json:"chart,omitempty"`
+	NoDir bool       `json:"-"`
+	Style Style      `json:"style,omitempty"`
+	Chart *ChartSpec `json:"chart,omitempty"`
 	// Widget is set when the cell carries a fill-in control.
 	Widget *WidgetSpec `json:"widget,omitempty"`
 }
 
 type Style struct {
-	FontFamily   string  `json:"fontFamily,omitempty"`
-	FontSize     float64 `json:"fontSize,omitempty"`
-	Bold         bool    `json:"bold,omitempty"`
-	Italic       bool    `json:"italic,omitempty"`
-	Underline    bool    `json:"underline,omitempty"`
-	Color        string  `json:"color,omitempty"`
-	Background   string  `json:"background,omitempty"`
+	FontFamily string  `json:"fontFamily,omitempty"`
+	FontSize   float64 `json:"fontSize,omitempty"`
+	Bold       bool    `json:"bold,omitempty"`
+	Italic     bool    `json:"italic,omitempty"`
+	Underline  bool    `json:"underline,omitempty"`
+	Color      string  `json:"color,omitempty"`
+	Background string  `json:"background,omitempty"`
 	// BackgroundImage carries a decoded embedded background (a data URI) for
 	// cells whose style uses an ImageBackground; BackgroundSize is its CSS
 	// background-size.
 	BackgroundImage string `json:"backgroundImage,omitempty"`
 	BackgroundSize  string `json:"backgroundSize,omitempty"`
-	HAlign       string  `json:"hAlign,omitempty"`
-	VAlign       string  `json:"vAlign,omitempty"`
-	BorderTop    string  `json:"borderTop,omitempty"`
-	BorderRight  string  `json:"borderRight,omitempty"`
-	BorderBottom string  `json:"borderBottom,omitempty"`
-	BorderLeft   string  `json:"borderLeft,omitempty"`
-	Wrap         bool    `json:"wrap,omitempty"`
-	NumberFormat string  `json:"numberFormat,omitempty"`
+	HAlign          string `json:"hAlign,omitempty"`
+	VAlign          string `json:"vAlign,omitempty"`
+	BorderTop       string `json:"borderTop,omitempty"`
+	BorderRight     string `json:"borderRight,omitempty"`
+	BorderBottom    string `json:"borderBottom,omitempty"`
+	BorderLeft      string `json:"borderLeft,omitempty"`
+	Wrap            bool   `json:"wrap,omitempty"`
+	NumberFormat    string `json:"numberFormat,omitempty"`
 }
 
 type ChartSpec struct {
@@ -145,18 +145,33 @@ type ChartSpec struct {
 	Colors     []string      `json:"colors,omitempty"`
 	Legend     bool          `json:"legend"`
 	LegendPos  string        `json:"legendPos,omitempty"`
-	Stack      bool          `json:"stack,omitempty"`
-	Horizontal bool          `json:"horizontal,omitempty"`
-	Warning    string        `json:"warning,omitempty"`
+	// LabelInside requests data labels be drawn inside the sector/slice rather
+	// than outside with a leader line. FineReport stores this on the pie/ring
+	// label's layout Attr: an absent/disabled 牵引线 (showLine=false) means the
+	// labels sit inside the ring.
+	LabelInside bool   `json:"labelInside,omitempty"`
+	Stack       bool   `json:"stack,omitempty"`
+	Horizontal  bool   `json:"horizontal,omitempty"`
+	Warning     string `json:"warning,omitempty"`
 
 	// FineReport charts that map onto no single ECharts type. The browser
 	// decides how faithfully it can draw them.
 	// Combo charts mix several plot kinds; Series[].Type carries the per
 	// series kind and is empty for ordinary charts.
-	Combo       bool      `json:"combo,omitempty"`
-	SizeRange   []float64 `json:"sizeRange,omitempty"`
-	MapArea     string    `json:"mapArea,omitempty"`
-	DrillDown   bool      `json:"drillDown,omitempty"`
+	Combo     bool      `json:"combo,omitempty"`
+	SizeRange []float64 `json:"sizeRange,omitempty"`
+	MapArea   string    `json:"mapArea,omitempty"`
+	DrillDown bool      `json:"drillDown,omitempty"`
+
+	// Map zoom / scroll-wheel behaviour, mirrored from FineReport's
+	// VanChartZoom zoomAttr ("滚轮缩放"). ZoomGesture drives ECharts roam so
+	// the map can be zoomed with the mouse wheel; ZoomVisible controls the
+	// built-in zoom buttons; ZoomLevel is the plot's zoomlevel attribute;
+	// ZoomScaling is the per-gesture scaling step.
+	ZoomGesture bool      `json:"zoomGesture,omitempty"`
+	ZoomVisible bool      `json:"zoomVisible,omitempty"`
+	ZoomLevel   float64   `json:"zoomLevel,omitempty"`
+	ZoomScaling float64   `json:"zoomScaling,omitempty"`
 	ExtraAxis   int       `json:"extraAxis,omitempty"`
 	Horizontal2 bool      `json:"horizontal2,omitempty"`
 	AxisLabel   []string  `json:"axisLabel,omitempty"`
@@ -204,12 +219,12 @@ type ChartSeries struct {
 }
 
 type FVSPage struct {
-	Name            string   `json:"name"`
-	Width           float64  `json:"width,omitempty"`
-	Height          float64  `json:"height,omitempty"`
-	Background      string   `json:"background,omitempty"`
-	BackgroundImage string   `json:"backgroundImage,omitempty"`
-	BackgroundSize  string   `json:"backgroundSize,omitempty"`
+	Name            string  `json:"name"`
+	Width           float64 `json:"width,omitempty"`
+	Height          float64 `json:"height,omitempty"`
+	Background      string  `json:"background,omitempty"`
+	BackgroundImage string  `json:"backgroundImage,omitempty"`
+	BackgroundSize  string  `json:"backgroundSize,omitempty"`
 	// Theme is "dark" when the page uses the FineReport dark-blue palette so
 	// the frontend paints themed chart colors and axis labels.
 	Theme   string   `json:"theme,omitempty"`

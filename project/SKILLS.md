@@ -540,3 +540,30 @@ git ls-remote origin        # 确认远程 commit 号与本地一致
 `&` 从「拼接」改成「层次引用」时，`"a"&B3` 被误判 —— 靠全量扫描才发现。
 
 ---
+
+---
+
+### S11 · 用 CDP 在运行时校准可视化参数，别反复编译盲试
+
+**适用**：前端资源是 `go:embed`（改一次要重新编译 + 重启服务），而参数
+（`zoom` / `center` / 布局）需要靠视觉试出来；或者要读图表库内部状态。
+
+**做法**
+
+1. 浏览器以 `--headless=new --remote-debugging-port=9222` 启动，
+   Node 22 自带 `fetch` 与全局 `WebSocket`，连
+   `http://127.0.0.1:9222/json/list` 拿到页面的 `webSocketDebuggerUrl`，
+   不需要装 playwright / puppeteer。
+2. 轮询 `Runtime.evaluate` 等图表实例就绪；先
+   `inst.setOption({animation:false})` 让所有图一次画完（否则截图会缺柱子/饼图）。
+3. 对每组候选参数执行 `inst.setOption({series:[{...}]})`，
+   再 `Page.captureScreenshot` 存 PNG —— 一次跑出多张对比图。
+4. 选定参数后**只编译一次**，把值写回源码。
+5. 需要读内部状态时用
+   `getModel().getSeriesByIndex(0).coordinateSystem`（`rect` / `scale`）与
+   `getZr().storage.getDisplayList()[0].transform`；
+   `--dump-dom` 则能直接看到 canvas 的真实宽高，用来排除「容器尺寸不对」。
+
+**本项目实例**：地图 `zoom=1.5 / 2.0 / 2.5` 三张图一次产出，直接选定 2.0；
+同时从 `geo.rect = [0,0,135,53.6]` 看出 ECharts 把 0–73° 的空白经度也算进了
+适配框，从而定位到 GeoJSON 坐标范围问题，而不是继续瞎调布局参数。
